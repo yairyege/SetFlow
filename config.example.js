@@ -13,7 +13,7 @@
 // --- Spotify ---
 // Get yours at: https://developer.spotify.com/dashboard
 const CLIENT_ID = 'YOUR_SPOTIFY_CLIENT_ID_HERE';
-const REDIRECT_URI = 'http://127.0.0.1:5500/index.html';
+const REDIRECT_URI = 'https://yairyege.github.io/SetFlow/';
 
 const SCOPES =
   'playlist-modify-public playlist-modify-private user-read-private';
