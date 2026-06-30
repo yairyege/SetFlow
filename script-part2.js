@@ -1,8 +1,12 @@
-// SETLIST_API, SETLIST_KEY and CORS_PROXY
-// are loaded from config.js
+// WORKER_URL is loaded from config.js
+// e.g. 'https://setflow.yairyeger.workers.dev'
+//
+// The Worker holds the real setlist.fm API key
+// server-side, so it never appears in this file
+// or in the browser.
 
 function setlistUrl(path) {
-  return CORS_PROXY + encodeURIComponent(SETLIST_API + path);
+  return `${WORKER_URL}/setlist${path}`;
 }
 
 // Rate limiter + 429 retry for setlist.fm
@@ -213,7 +217,7 @@ async function getSetlistSongs(artistName) {
       setlistUrl(
         `/search/artists?artistName=${encodeURIComponent(artistName)}&p=1&sort=relevance`
       ),
-      { headers: { 'x-api-key': SETLIST_KEY, 'Accept': 'application/json' } }
+      { headers: { 'Accept': 'application/json' } }
     );
 
     if (!searchRes.ok) {
@@ -233,7 +237,7 @@ async function getSetlistSongs(artistName) {
 
     const setlistRes = await setlistFetch(
       setlistUrl(`/artist/${artist.mbid}/setlists?p=1`),
-      { headers: { 'x-api-key': SETLIST_KEY, 'Accept': 'application/json' } }
+      { headers: { 'Accept': 'application/json' } }
     );
 
     if (!setlistRes.ok) {
