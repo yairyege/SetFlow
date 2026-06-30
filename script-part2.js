@@ -235,24 +235,40 @@ async function getSetlistSongs(artistName) {
 
     console.log(`Setlist.fm artist: "${artist.name}" mbid=${artist.mbid}`);
 
-    const setlistRes = await setlistFetch(
-      setlistUrl(`/artist/${artist.mbid}/setlists?p=1`),
-      { headers: { 'Accept': 'application/json' } }
-    );
+    // fetch page 1 AND page 2 (up to ~40 shows total)
+    // for a more reliable picture of what's actually
+    // a "core" setlist song vs a one-off rarity
+    const setlists = [];
 
-    if (!setlistRes.ok) {
-      console.warn(`Setlist.fm setlists HTTP ${setlistRes.status} for "${artistName}"`);
-      return [];
+    for (const page of [1, 2]) {
+      const setlistRes = await setlistFetch(
+        setlistUrl(`/artist/${artist.mbid}/setlists?p=${page}`),
+        { headers: { 'Accept': 'application/json' } }
+      );
+
+      if (!setlistRes.ok) {
+        if (page === 1) {
+          console.warn(`Setlist.fm setlists HTTP ${setlistRes.status} for "${artistName}"`);
+          return [];
+        }
+        // page 2 failing is fine, just use what we have from page 1
+        break;
+      }
+
+      const setlistData = await setlistRes.json();
+      const pageShows = setlistData.setlist || [];
+
+      if (!pageShows.length) break;
+
+      setlists.push(...pageShows);
     }
-
-    const setlistData = await setlistRes.json();
-    const setlists = setlistData.setlist || [];
 
     if (!setlists.length) {
       console.warn(`Setlist.fm: 0 setlists for "${artistName}"`);
       return [];
     }
 
+    const totalShows = setlists.length;
     const playCount = {};
     const originalName = {};
 
@@ -273,12 +289,27 @@ async function getSetlistSongs(artistName) {
       return [];
     }
 
+    // sort by consistency (% of shows the song appeared in)
+    // as the PRIMARY signal, raw count as tiebreaker.
+    // This protects "core" songs that are played almost every
+    // night from being outranked by a one-off outlier track
+    // that happened to chart slightly higher by coincidence.
     const sorted = Object.entries(playCount)
-      .sort((a, b) => b[1] - a[1])
-      .map(([key]) => originalName[key]);
+      .map(([key, count]) => ({
+        key,
+        count,
+        consistency: count / totalShows
+      }))
+      .sort((a, b) => {
+        if (b.consistency !== a.consistency) {
+          return b.consistency - a.consistency;
+        }
+        return b.count - a.count;
+      })
+      .map((entry) => originalName[entry.key]);
 
     console.log(
-      `Setlist.fm "${artistName}": ${sorted.length} songs from ${setlists.length} shows. Top 5: ${sorted.slice(0, 5).join(', ')}`
+      `Setlist.fm "${artistName}": ${sorted.length} songs from ${totalShows} shows. Top 5: ${sorted.slice(0, 5).join(', ')}`
     );
 
     return sorted;
@@ -684,7 +715,7 @@ document
         ? parseInt(custom.value) || 5
         : parseInt(select.value);
 
-      amount = Math.max(1, Math.min(amount, 10));
+      amount = Math.max(1, Math.min(amount, 20));
       selected.push({ artist: cb.value, amount });
     });
 

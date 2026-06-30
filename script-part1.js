@@ -19,11 +19,11 @@ let MASTER_BANDS = [
   'Metallica',
   'Parkway Drive',
   'Architects',
-  'Thornhill',
+  'Slaughter To Prevail',
   'Spiritbox',
   'Slipknot',
   'Gojira',
-  'Deftones',
+  'Linkin Park',
   'Bring Me The Horizon',
   'Korn',
   'System Of A Down',
@@ -31,15 +31,16 @@ let MASTER_BANDS = [
   'Iron Maiden',
   'Judas Priest',
   'Lamb of God',
-  'Mastodon',
-  'Meshuggah',
+  'Ice Nine Kills',
+  'Motionless In White',
   'Trivium',
   'Sleep Token',
   'Bad Omens',
   'Knocked Loose',
-  'Turnstile',
-  'Polyphia',
+  'I Prevail',
+  'Papa Roach',
   'Lorna Shore'
+
 ].sort();
 
 // ==========================
@@ -48,21 +49,23 @@ let MASTER_BANDS = [
 
 const TIER_CONFIGS = {
   festival: [
-    { name: 'Headliner (10 Songs)', songs: 10 },
-    { name: 'Co-Headliner (8 Songs)', songs: 8 },
-    { name: 'Big Band (7 Songs)', songs: 7 },
-    { name: 'Small Band (5 Songs)', songs: 5 },
+    { name: 'Full Setlist (up to 20 Songs)', songs: 20 },
+    { name: 'Headliner (15 Songs)', songs: 15 },
+    { name: 'Co-Headliner (13 Songs)', songs: 13 },
+    { name: 'Big Band (8 Songs)', songs: 8 },
+    { name: 'Small Band (7 Songs)', songs: 7 },
     { name: 'Discovery (3 Songs)', songs: 3 },
     { name: 'Custom Override...', songs: 'custom' }
   ],
 
   tour: [
-    { name: 'Headliner (10 Songs)', songs: 10 },
-    { name: 'Special Guest (7 Songs)', songs: 7 },
-    { name: 'Support #1 (5 Songs)', songs: 5 },
-    { name: 'Support #2 (3 Songs)', songs: 3 },
-    { name: 'Support #3 (3 Songs)', songs: 3 },
-    { name: 'Support #4 (3 Songs)', songs: 3 },
+    { name: 'Full Setlist (up to 20 Songs)', songs: 20 },
+    { name: 'Headliner (15 Songs)', songs: 15 },
+    { name: 'Special Guest (11 Songs)', songs: 11 },
+    { name: 'Support #1 (8 Songs)', songs: 8 },
+    { name: 'Support #2 (7 Songs)', songs: 7 },
+    { name: 'Support #3 (6 Songs)', songs: 6 },
+    { name: 'Support #4 (5 Songs)', songs: 5 },
     { name: 'Custom Override...', songs: 'custom' }
   ]
 };
