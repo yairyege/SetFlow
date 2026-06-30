@@ -294,6 +294,13 @@ boot();
 
 // ==========================
 // RENDER BAND GRID
+//
+// IMPORTANT: this function rebuilds the entire grid
+// from scratch every time it's called (mode switch,
+// adding a custom band, etc). To prevent wiping out
+// the user's picks, we snapshot every card's state
+// BEFORE clearing the grid, then restore it after
+// rebuilding — matched by band name.
 // ==========================
 
 function renderGrid() {
@@ -302,6 +309,24 @@ function renderGrid() {
       'band-grid'
     );
 
+  // --- 1. SAVE current state before wiping ---
+  const savedState = {};
+
+  grid.querySelectorAll('.band-card').forEach((card) => {
+    const checkbox = card.querySelector('.band-checkbox');
+    const select = card.querySelector('.tier-select');
+    const custom = card.querySelector('.custom-input');
+
+    if (checkbox) {
+      savedState[checkbox.value] = {
+        checked: checkbox.checked,
+        tierValue: select ? select.value : null,
+        customValue: custom ? custom.value : null
+      };
+    }
+  });
+
+  // --- 2. WIPE and rebuild ---
   grid.innerHTML = '';
 
   MASTER_BANDS.forEach(
@@ -366,6 +391,43 @@ function renderGrid() {
           '.band-checkbox'
         );
 
+      const select =
+        card.querySelector(
+          '.tier-select'
+        );
+
+      const custom =
+        card.querySelector(
+          '.custom-input'
+        );
+
+      // --- 3. RESTORE saved state if this band had one ---
+      const prev = savedState[band];
+
+      if (prev) {
+        checkbox.checked = prev.checked;
+        card.classList.toggle('selected', prev.checked);
+
+        // only restore tier value if that option still
+        // exists in the current mode's tier list
+        const optionExists = Array.from(select.options).some(
+          (opt) => opt.value === prev.tierValue
+        );
+
+        if (optionExists) {
+          select.value = prev.tierValue;
+        }
+
+        if (prev.customValue !== null) {
+          custom.value = prev.customValue;
+        }
+
+        custom.classList.toggle(
+          'hidden',
+          select.value !== 'custom'
+        );
+      }
+
       checkbox.addEventListener(
         'change',
         () => {
@@ -376,16 +438,6 @@ function renderGrid() {
           );
         }
       );
-
-      const select =
-        card.querySelector(
-          '.tier-select'
-        );
-
-      const custom =
-        card.querySelector(
-          '.custom-input'
-        );
 
       select.addEventListener(
         'change',
