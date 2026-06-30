@@ -174,11 +174,22 @@
       color: #1db954;
     }
 
-    @media (max-width: 800px) {
-      .meta-row {
-        grid-template-columns: 1fr;
-      }
-    }
+    @media (max-width: 600px) {
+  /* Trim the massive outer desktop padding so the app doesn't choke on small screens */
+  body {
+    padding: 15px 10px;
+  }
+  
+  .container {
+    padding: 15px;
+  }
+
+  /* Force the grid to stay locked within the screen width while keeping your exact card look */
+  .band-grid {
+    grid-template-columns: 1fr; /* Lines cards up perfectly in a single column layout */
+    padding: 10px;
+  }
+}
 
     .options-row {
       display: flex;
