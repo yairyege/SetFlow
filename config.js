@@ -8,7 +8,7 @@
 
 // --- Spotify ---
 const CLIENT_ID = '96ffdeb107d54909b65a95d930b40d04';
-const REDIRECT_URI = 'https://yairyege.github.io/setflow/index.html';
+const REDIRECT_URI = 'https://yairyege.github.io/SetFlow/index.html';
 
 const SCOPES =
   'playlist-modify-public playlist-modify-private user-read-private';
