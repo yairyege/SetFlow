@@ -184,6 +184,12 @@
     padding: 15px;
   }
 
+  /* 🛠️ FIX FOR PLAYLIST NAME & DESCRIPTION: Force them to stack vertically */
+  .meta-row {
+    grid-template-columns: 1fr !important;
+    gap: 15px; /* Adds a clean gap between the two stacked inputs */
+  }
+
   /* Force the grid to stay locked within the screen width while keeping your exact card look */
   .band-grid {
     grid-template-columns: 1fr; /* Lines cards up perfectly in a single column layout */
