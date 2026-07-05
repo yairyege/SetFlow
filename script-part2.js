@@ -1,15 +1,111 @@
-// WORKER_URL is loaded from config.js
-// e.g. 'https://setflow.yairyeger.workers.dev'
-//
-// The Worker holds the real setlist.fm API key
-// server-side, so it never appears in this file
-// or in the browser.
+// WORKER_URL, SUPABASE_URL, SUPABASE_KEY loaded from config.js
 
 function setlistUrl(path) {
   return `${WORKER_URL}/setlist${path}`;
 }
 
-// Rate limiter + 429 retry for setlist.fm
+// ==========================
+// SUPABASE BAND CACHE
+//
+// Flow for every band request:
+//   1. Check Supabase for cached songs
+//   2. If found and fresh (< 30 days) → use instantly
+//   3. If missing or stale → hit setlist.fm → save to DB
+//
+// This means each band is only ever looked up
+// on setlist.fm ONCE. After that it's instant.
+// ==========================
+
+const CACHE_MAX_AGE_DAYS = 30;
+
+async function dbGetBand(name) {
+  try {
+    const key = name.toLowerCase().trim();
+
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/bands?name=eq.${encodeURIComponent(key)}&select=*`,
+      {
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    if (!res.ok) {
+      console.warn(`Supabase GET failed: ${res.status}`);
+      return null;
+    }
+
+    const rows = await res.json();
+    if (!rows.length) return null;
+
+    const row = rows[0];
+
+    // check freshness — if older than 30 days, treat as stale
+    const updatedAt = new Date(row.updated_at);
+    const ageMs = Date.now() - updatedAt.getTime();
+    const ageDays = ageMs / (1000 * 60 * 60 * 24);
+
+    if (ageDays > CACHE_MAX_AGE_DAYS) {
+      console.log(`Cache stale (${Math.round(ageDays)}d) for "${name}" — refreshing`);
+      return null;
+    }
+
+    console.log(`Cache HIT ✅ "${name}" (${Math.round(ageDays)}d old)`);
+    return row;
+
+  } catch (err) {
+    console.warn(`Supabase GET exception: ${err.message}`);
+    return null;
+  }
+}
+
+async function dbSaveBand(name, mbid, songs, spotifyId, source) {
+  try {
+    const key = name.toLowerCase().trim();
+
+    const payload = {
+      name: key,
+      mbid: mbid || null,
+      songs: songs,
+      spotify_id: spotifyId || null,
+      source: source || 'setlist',
+      updated_at: new Date().toISOString()
+    };
+
+    // upsert — insert if new, update if exists
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/bands`,
+      {
+        method: 'POST',
+        headers: {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'resolution=merge-duplicates'
+        },
+        body: JSON.stringify(payload)
+      }
+    );
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.warn(`Supabase SAVE failed: ${res.status} — ${errText}`);
+    } else {
+      console.log(`Cache SAVED ✅ "${name}" (${songs.length} songs, source: ${source})`);
+    }
+
+  } catch (err) {
+    console.warn(`Supabase SAVE exception: ${err.message}`);
+  }
+}
+
+// ==========================
+// RATE LIMITER + 429 RETRY
+// ==========================
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -26,15 +122,11 @@ async function setlistFetch(url, opts) {
   if (res.status === 429) {
     console.warn('Setlist.fm 429 — waiting 6s and retrying...');
     await wait(6000);
-    // push lastSetlistCall forward so the next band
-    // also waits a full gap after this retry
     lastSetlistCall = Date.now();
     res = await fetch(url, opts);
 
-    // if still 429 after retry, return the response
-    // so the caller logs it and falls back to Spotify
     if (res.status === 429) {
-      console.warn('Setlist.fm still 429 after retry — skipping to Spotify fallback');
+      console.warn('Setlist.fm still 429 after retry — falling back to Spotify');
     }
   }
 
@@ -43,11 +135,6 @@ async function setlistFetch(url, opts) {
 
 // ==========================
 // LIVE VERSION FILTER
-//
-// Returns true if a track name looks
-// like a live recording, acoustic,
-// unplugged, or concert version.
-// Used to exclude these everywhere.
 // ==========================
 
 function isLiveTrack(name) {
@@ -56,13 +143,13 @@ function isLiveTrack(name) {
   const lower = name.toLowerCase();
 
   const livePatterns = [
-    /\blive\b/,         // "live", "live at", "live from"
-    /\(live/,           // "(Live", "(Live At"
-    /- live/,           // "- Live"
-    /\bconcert\b/,      // "concert version"
-    /\bunplugged\b/,    // "unplugged"
-    /\bacoustic\b/,     // "acoustic version"
-    /\brecorded at\b/,  // "recorded at"
+    /\blive\b/,
+    /\(live/,
+    /- live/,
+    /\bconcert\b/,
+    /\bunplugged\b/,
+    /\bacoustic\b/,
+    /\brecorded at\b/,
     /\bat the\b.*\b(arena|stadium|festival|hall|theatre|theater|club|venue)\b/
   ];
 
@@ -82,18 +169,13 @@ document
 
     document
       .getElementById('new-releases-btn')
-      .classList.toggle(
-        'new-releases-active',
-        includeNewReleases
-      );
+      .classList.toggle('new-releases-active', includeNewReleases);
 
-    console.log(
-      `New releases: ${includeNewReleases ? 'ON' : 'OFF'}`
-    );
+    console.log(`New releases: ${includeNewReleases ? 'ON' : 'OFF'}`);
   });
 
 // ==========================
-// SELECT ALL
+// SELECT ALL / CLEAR ALL
 // ==========================
 
 document
@@ -107,10 +189,6 @@ document
         card.classList.add('selected');
       });
   });
-
-// ==========================
-// CLEAR ALL
-// ==========================
 
 document
   .getElementById('clear-all')
@@ -209,9 +287,23 @@ async function getArtistId(artistName) {
 
 // ==========================
 // SETLIST.FM — MOST PLAYED LIVE SONGS
+//
+// Now cache-aware:
+//   1. Check Supabase first
+//   2. Cache hit → return instantly, zero setlist.fm calls
+//   3. Cache miss → fetch setlist.fm → save to Supabase
 // ==========================
 
 async function getSetlistSongs(artistName) {
+
+  // --- CACHE CHECK ---
+  const cached = await dbGetBand(artistName);
+
+  if (cached && cached.songs && cached.songs.length > 0) {
+    return cached.songs; // array of song name strings
+  }
+
+  // --- CACHE MISS: fetch from setlist.fm ---
   try {
     const searchRes = await setlistFetch(
       setlistUrl(
@@ -235,9 +327,7 @@ async function getSetlistSongs(artistName) {
 
     console.log(`Setlist.fm artist: "${artist.name}" mbid=${artist.mbid}`);
 
-    // fetch page 1 AND page 2 (up to ~40 shows total)
-    // for a more reliable picture of what's actually
-    // a "core" setlist song vs a one-off rarity
+    // fetch page 1 and page 2 (~40 shows total)
     const setlists = [];
 
     for (const page of [1, 2]) {
@@ -251,15 +341,12 @@ async function getSetlistSongs(artistName) {
           console.warn(`Setlist.fm setlists HTTP ${setlistRes.status} for "${artistName}"`);
           return [];
         }
-        // page 2 failing is fine, just use what we have from page 1
         break;
       }
 
       const setlistData = await setlistRes.json();
       const pageShows = setlistData.setlist || [];
-
       if (!pageShows.length) break;
-
       setlists.push(...pageShows);
     }
 
@@ -289,11 +376,7 @@ async function getSetlistSongs(artistName) {
       return [];
     }
 
-    // sort by consistency (% of shows the song appeared in)
-    // as the PRIMARY signal, raw count as tiebreaker.
-    // This protects "core" songs that are played almost every
-    // night from being outranked by a one-off outlier track
-    // that happened to chart slightly higher by coincidence.
+    // sort by consistency (% of shows) then raw count
     const sorted = Object.entries(playCount)
       .map(([key, count]) => ({
         key,
@@ -312,6 +395,11 @@ async function getSetlistSongs(artistName) {
       `Setlist.fm "${artistName}": ${sorted.length} songs from ${totalShows} shows. Top 5: ${sorted.slice(0, 5).join(', ')}`
     );
 
+    // --- SAVE TO CACHE ---
+    // get Spotify ID to store alongside the songs
+    const spotifyId = await getArtistId(artistName);
+    await dbSaveBand(artistName, artist.mbid, sorted, spotifyId, 'setlist');
+
     return sorted;
 
   } catch (err) {
@@ -322,18 +410,32 @@ async function getSetlistSongs(artistName) {
 
 // ==========================
 // SPOTIFY — FIND TRACK
-// Verifies by artist ID.
-// Skips live versions.
 // ==========================
 
 async function findTrack(artistName, songName) {
   const artistId = await getArtistId(artistName);
 
+  // Returns true if a track name looks like a duet,
+  // remix, or featured version — we prefer the original.
+  function isAltVersion(name) {
+    const lower = (name || '').toLowerCase();
+    return (
+      /feat\.?/.test(lower) ||
+      /ft\.?/.test(lower) ||
+      /with.{1,30}version/.test(lower) ||
+      /remix/.test(lower) ||
+      /edit/.test(lower) ||
+      /sped up/.test(lower) ||
+      /slowed/.test(lower)
+    );
+  }
+
   async function searchTrack(q) {
+    // fetch 10 candidates so we can pick the best one
     const params = new URLSearchParams({
       q,
       type: 'track',
-      limit: '5'
+      limit: '10'
     });
 
     const res = await fetch(
@@ -346,10 +448,10 @@ async function findTrack(artistName, songName) {
     const data = await res.json();
     const items = data.tracks?.items || [];
 
-    for (const t of items) {
-      // skip live versions
-      if (isLiveTrack(t.name)) continue;
-      if (isLiveTrack(t.album?.name)) continue;
+    // filter: correct artist, not live, not an alt version
+    const candidates = items.filter((t) => {
+      if (isLiveTrack(t.name)) return false;
+      if (isLiveTrack(t.album?.name)) return false;
 
       const isCorrectArtist = artistId
         ? t.artists?.some((a) => a.id === artistId)
@@ -357,22 +459,37 @@ async function findTrack(artistName, songName) {
             (a) => a.name.toLowerCase() === artistName.toLowerCase()
           );
 
-      if (!isCorrectArtist) continue;
+      return isCorrectArtist;
+    });
 
-      return {
-        uri: t.uri,
-        name: t.name,
-        artistName: t.artists?.[0]?.name || artistName
-      };
-    }
+    if (!candidates.length) return null;
 
-    return null;
+    // prefer non-alt versions, sort by popularity descending
+    // so we always get the highest-streamed original
+    const originals = candidates.filter(
+      (t) => !isAltVersion(t.name)
+    );
+
+    const pool = originals.length ? originals : candidates;
+
+    pool.sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
+
+    const best = pool[0];
+
+    return {
+      uri: best.uri,
+      name: best.name,
+      artistName: best.artists?.[0]?.name || artistName,
+      popularity: best.popularity || 0
+    };
   }
 
+  // precise search first
   let track = await searchTrack(
     `track:"${songName}" artist:"${artistName}"`
   );
 
+  // looser search if precise returns nothing
   if (!track) {
     track = await searchTrack(`${songName} ${artistName}`);
   }
@@ -383,8 +500,6 @@ async function findTrack(artistName, songName) {
 // ==========================
 // SPOTIFY FALLBACK —
 // MOST STREAMED TRACKS
-// Verifies by artist ID.
-// Skips live versions.
 // ==========================
 
 async function getSpotifyFallbackTracks(artistName, needed) {
@@ -427,8 +542,6 @@ async function getSpotifyFallbackTracks(artistName, needed) {
 
     for (const track of items) {
       if (!track.uri || seenUris.has(track.uri)) continue;
-
-      // skip live versions
       if (isLiveTrack(track.name)) continue;
       if (isLiveTrack(track.album?.name)) continue;
 
@@ -496,20 +609,13 @@ async function getSpotifyFallbackTracks(artistName, needed) {
 }
 
 // ==========================
-// NEW RELEASES —
-// LATEST TRACK FOR A BAND
-//
-// Fetches the artist's most recently
-// released single or album track.
-// Returns one track object or null.
-// Skips live versions automatically.
+// NEW RELEASES
 // ==========================
 
 async function getNewRelease(artistName) {
   const artistId = await getArtistId(artistName);
   if (!artistId) return null;
 
-  // fetch more candidates so we can find a truly recent one
   const res = await fetch(
     `${SPOTIFY_API}/artists/${artistId}/albums?include_groups=album,single&limit=10&offset=0`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -522,31 +628,25 @@ async function getNewRelease(artistName) {
 
   const data = await res.json();
 
-  // filter out live albums, then sort by release_date descending
-  // so we always get the genuinely newest release
   const cutoff = new Date();
-  cutoff.setFullYear(cutoff.getFullYear() - 1); // 12 months ago
+  cutoff.setFullYear(cutoff.getFullYear() - 1);
 
   const recentAlbums = (data.items || [])
     .filter((a) => {
       if (isLiveTrack(a.name)) return false;
-      const releaseDate = new Date(a.release_date);
-      return releaseDate >= cutoff;
+      return new Date(a.release_date) >= cutoff;
     })
     .sort((a, b) =>
       new Date(b.release_date) - new Date(a.release_date)
     );
 
   if (!recentAlbums.length) {
-    console.warn(
-      `New releases: no releases in last 12 months for "${artistName}"`
-    );
+    console.warn(`New releases: nothing in last 12 months for "${artistName}"`);
     return null;
   }
 
   const latest = recentAlbums[0];
 
-  // get tracks from that release
   const tracksRes = await fetch(
     `${SPOTIFY_API}/albums/${latest.id}/tracks?limit=5`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -621,7 +721,6 @@ async function resolveTracksForBand(artistName, amount) {
     }
 
     const existingUris = new Set(tracks.map((t) => t.uri));
-
     const fallback = await getSpotifyFallbackTracks(artistName, amount);
 
     for (const t of fallback) {
@@ -632,17 +731,13 @@ async function resolveTracksForBand(artistName, amount) {
       tracks.push(t);
     }
 
-    console.log(
-      `${artistName}: final ${tracks.length}/${amount} tracks`
-    );
+    console.log(`${artistName}: final ${tracks.length}/${amount} tracks`);
   }
 
   if (!tracks.length) {
     console.warn(`${artistName}: found nothing. Check spelling.`);
   }
 
-  // hard cap — never return more than requested
-  // regardless of what setlist or Spotify gave us
   return tracks.slice(0, amount);
 }
 
@@ -724,24 +819,17 @@ document
       return;
     }
 
-    // sort the selected bands before generating
-    const sortOrder =
-      document.getElementById('sort-order').value;
+    const sortOrder = document.getElementById('sort-order').value;
 
     if (sortOrder === 'name-asc') {
-      selected.sort((a, b) =>
-        a.artist.localeCompare(b.artist)
-      );
+      selected.sort((a, b) => a.artist.localeCompare(b.artist));
     } else if (sortOrder === 'name-desc') {
-      selected.sort((a, b) =>
-        b.artist.localeCompare(a.artist)
-      );
+      selected.sort((a, b) => b.artist.localeCompare(a.artist));
     } else if (sortOrder === 'songs-asc') {
       selected.sort((a, b) => a.amount - b.amount);
     } else if (sortOrder === 'songs-desc') {
       selected.sort((a, b) => b.amount - a.amount);
     }
-    // 'as-selected' keeps the grid order
 
     const btn = document.getElementById('generate-btn');
     btn.disabled = true;
@@ -775,13 +863,9 @@ document
           seenTitles.add(titleKey);
           finalTracks.push(t);
         }
-
       }
 
-      // --- NEW RELEASES ---
-      // fetched separately AFTER all bands are done
-      // so they never inflate per-band song counts.
-      // Each band gets at most 1 new release appended.
+      // new releases appended after all bands
       if (includeNewReleases) {
         for (const band of selected) {
           status(`Fetching new release for ${band.artist}...`);
@@ -795,17 +879,13 @@ document
               .trim();
 
             const titleKey =
-              (newRelease.artistName || '').toLowerCase() +
-              '|' + cleanName;
+              (newRelease.artistName || '').toLowerCase() + '|' + cleanName;
 
             if (!seenTitles.has(titleKey)) {
               seenUris.add(newRelease.uri);
               seenTitles.add(titleKey);
               finalTracks.push(newRelease);
-
-              console.log(
-                `+ New release: "${newRelease.name}" by ${band.artist}`
-              );
+              console.log(`+ New release: "${newRelease.name}" by ${band.artist}`);
             }
           }
         }
@@ -826,9 +906,7 @@ document
       status('Adding songs...');
       await addTracks(playlist.id, finalUris);
 
-      const newReleaseCount = finalTracks.filter(
-        (t) => t.isNewRelease
-      ).length;
+      const newReleaseCount = finalTracks.filter((t) => t.isNewRelease).length;
 
       status(`
         Playlist created!
@@ -838,9 +916,7 @@ document
         </a>
         <br><br>
         Songs added: ${finalUris.length}
-        ${newReleaseCount > 0
-          ? `<br>✦ New releases included: ${newReleaseCount}`
-          : ''}
+        ${newReleaseCount > 0 ? `<br>✦ New releases included: ${newReleaseCount}` : ''}
       `);
 
     } catch (err) {

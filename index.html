@@ -2,389 +2,895 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SetFlow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
   <style>
-    * {
+    /* ================================
+       TOKENS
+    ================================ */
+    :root {
+      --bg:          #0a0a0a;
+      --surface:     #111111;
+      --surface-2:   #1a1a1a;
+      --surface-3:   #222222;
+      --border:      #2a2a2a;
+      --border-2:    #333333;
+      --text:        #ffffff;
+      --text-muted:  #888888;
+      --text-dim:    #555555;
+      --gold:        #c8a951;
+      --gold-dim:    #8a7235;
+      --gold-glow:   rgba(200,169,81,0.08);
+      --gold-glow-2: rgba(200,169,81,0.15);
+      --spotify:     #1db954;
+      --spotify-dim: #158a3e;
+      --red:         #e05252;
+      --radius-sm:   6px;
+      --radius-md:   10px;
+      --radius-lg:   14px;
+      --radius-xl:   20px;
+      --font-display: 'Bebas Neue', sans-serif;
+      --font-body:    'Inter', sans-serif;
+    }
+
+    /* ================================
+       RESET + BASE
+    ================================ */
+    *, *::before, *::after {
       box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      -webkit-text-size-adjust: 100%;
     }
 
     body {
-      margin: 0;
-      background: #121212;
-      color: white;
-      font-family: Arial, sans-serif;
-      padding: 30px 20px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-body);
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+      padding: 0;
     }
 
-    .container {
+    a {
+      color: var(--gold);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    input, select, button {
+      font-family: var(--font-body);
+      font-size: 14px;
+    }
+
+    /* ================================
+       HERO / HEADER
+    ================================ */
+    .hero {
+      background: linear-gradient(
+        180deg,
+        #0f0f0f 0%,
+        var(--bg) 100%
+      );
+      border-bottom: 1px solid var(--border);
+      padding: 40px 20px 32px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* subtle texture lines behind the logo */
+    .hero::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(
+        90deg,
+        transparent,
+        transparent 80px,
+        rgba(255,255,255,0.015) 80px,
+        rgba(255,255,255,0.015) 81px
+      );
+      pointer-events: none;
+    }
+
+    .hero-logo {
+      font-family: var(--font-display);
+      font-size: clamp(56px, 14vw, 96px);
+      letter-spacing: 0.06em;
+      color: var(--text);
+      line-height: 1;
+      position: relative;
+    }
+
+    .hero-logo span {
+      color: var(--gold);
+    }
+
+    .hero-sub {
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-top: 10px;
+      position: relative;
+    }
+
+    /* ================================
+       LAYOUT
+    ================================ */
+    .app-shell {
       max-width: 1100px;
-      margin: auto;
-      background: #181818;
-      border-radius: 14px;
-      padding: 30px;
+      margin: 0 auto;
+      padding: 28px 20px 60px;
     }
 
-    h1 {
+    /* ================================
+       AUTH VIEW
+    ================================ */
+    .auth-panel {
       text-align: center;
-      margin-top: 0;
-      margin-bottom: 8px;
+      padding: 60px 20px;
     }
 
-    .subtitle {
-      text-align: center;
-      color: #aaa;
-      margin-bottom: 30px;
-    }
-
-    .btn {
-      border: none;
-      background: #1db954;
-      color: black;
-      font-weight: bold;
-      padding: 12px 24px;
-      border-radius: 30px;
-      cursor: pointer;
+    .auth-panel p {
+      color: var(--text-muted);
+      margin-bottom: 28px;
       font-size: 15px;
+      line-height: 1.7;
     }
 
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    .btn-secondary {
-      border: 1px solid #444;
-      background: #222;
-      color: white;
-      padding: 10px 16px;
-      border-radius: 8px;
-      cursor: pointer;
-    }
-
-    .btn-secondary.active {
-      background: #1db954;
-      color: black;
-      border-color: #1db954;
-      font-weight: bold;
-    }
-
-    .hidden {
-      display: none !important;
-    }
-
-    .mode-row {
+    /* ================================
+       CONNECTED BAR
+    ================================ */
+    .connected-bar {
       display: flex;
-      gap: 15px;
-      justify-content: center;
-      margin-bottom: 25px;
+      align-items: center;
+      gap: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 12px 16px;
+      margin-bottom: 24px;
+      font-size: 13px;
+      font-weight: 500;
     }
 
+    .connected-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--spotify);
+      flex-shrink: 0;
+      box-shadow: 0 0 6px var(--spotify);
+    }
+
+    .connected-bar span {
+      color: var(--text-muted);
+    }
+
+    .connected-bar strong {
+      color: var(--text);
+    }
+
+    /* ================================
+       SECTION LABELS
+    ================================ */
+    .section-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 10px;
+    }
+
+    /* ================================
+       MODE TOGGLE
+    ================================ */
+    .mode-toggle {
+      display: flex;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xl);
+      padding: 4px;
+      gap: 4px;
+      margin-bottom: 24px;
+      width: fit-content;
+    }
+
+    .mode-btn {
+      flex: 1;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 13px;
+      padding: 9px 24px;
+      border-radius: var(--radius-xl);
+      cursor: pointer;
+      transition: all 0.18s ease;
+      white-space: nowrap;
+      letter-spacing: 0.03em;
+    }
+
+    .mode-btn.active {
+      background: var(--gold);
+      color: #000;
+    }
+
+    .mode-btn:not(.active):hover {
+      color: var(--text);
+      background: var(--surface-2);
+    }
+
+    /* ================================
+       META ROW (playlist name/desc)
+    ================================ */
     .meta-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 20px;
-      margin-bottom: 25px;
+      gap: 16px;
+      margin-bottom: 24px;
     }
 
-    label {
+    .field-group label {
       display: block;
-      margin-bottom: 8px;
-      color: #1db954;
-      font-weight: bold;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 7px;
     }
 
-    input,
-    select {
+    .field-group input {
       width: 100%;
-      padding: 12px;
-      border-radius: 8px;
-      border: 1px solid #333;
-      background: #222;
-      color: white;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--text);
+      padding: 11px 14px;
+      transition: border-color 0.15s;
+      outline: none;
     }
 
+    .field-group input:focus {
+      border-color: var(--gold-dim);
+    }
+
+    /* ================================
+       TOOLBAR
+    ================================ */
     .toolbar {
       display: flex;
-      gap: 15px;
-      margin-bottom: 15px;
+      gap: 10px;
+      margin-bottom: 14px;
       flex-wrap: wrap;
+      align-items: center;
     }
 
-    .toolbar input {
+    .search-wrap {
       flex: 1;
-      min-width: 250px;
+      min-width: 200px;
+      position: relative;
     }
 
+    .search-wrap svg {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-dim);
+      pointer-events: none;
+    }
+
+    .search-wrap input {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--text);
+      padding: 10px 14px 10px 36px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .search-wrap input:focus {
+      border-color: var(--border-2);
+    }
+
+    .search-wrap input::placeholder {
+      color: var(--text-dim);
+    }
+
+    /* ================================
+       BUTTONS
+    ================================ */
+    .btn {
+      border: none;
+      background: var(--spotify);
+      color: #000;
+      font-weight: 700;
+      font-size: 14px;
+      padding: 13px 28px;
+      border-radius: var(--radius-xl);
+      cursor: pointer;
+      letter-spacing: 0.02em;
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    .btn:hover {
+      background: #1ed760;
+    }
+
+    .btn:active {
+      transform: scale(0.98);
+    }
+
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-ghost {
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 9px 16px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      letter-spacing: 0.04em;
+      transition: all 0.15s;
+    }
+
+    .btn-ghost:hover {
+      border-color: var(--border-2);
+      color: var(--text);
+      background: var(--surface-2);
+    }
+
+    .btn-ghost.active-gold {
+      border-color: var(--gold);
+      color: var(--gold);
+      background: var(--gold-glow);
+    }
+
+    /* ================================
+       BAND GRID
+    ================================ */
     .band-grid {
       display: grid;
-      grid-template-columns:
-        repeat(auto-fill, minmax(280px, 1fr));
-      gap: 15px;
-      max-height: 500px;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 10px;
+      max-height: 520px;
       overflow-y: auto;
-      background: #101010;
-      padding: 15px;
-      border-radius: 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 12px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-2) transparent;
     }
 
+    .band-grid::-webkit-scrollbar {
+      width: 5px;
+    }
+
+    .band-grid::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .band-grid::-webkit-scrollbar-thumb {
+      background: var(--border-2);
+      border-radius: 3px;
+    }
+
+    /* ================================
+       BAND CARD
+    ================================ */
     .band-card {
-      background: #1d1d1d;
-      border: 1px solid #333;
-      border-radius: 12px;
-      padding: 15px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 13px 14px;
+      transition: border-color 0.15s, background 0.15s;
+      position: relative;
+    }
+
+    .band-card:hover {
+      border-color: var(--border-2);
     }
 
     .band-card.selected {
-      border-color: #1db954;
+      border-color: var(--gold-dim);
+      background: var(--gold-glow);
+    }
+
+    /* gold left-bar on selected — the signature element */
+    .band-card.selected::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 10%;
+      height: 80%;
+      width: 3px;
+      background: var(--gold);
+      border-radius: 0 3px 3px 0;
     }
 
     .card-top {
       display: flex;
-      gap: 10px;
       align-items: center;
-      margin-bottom: 12px;
-      font-weight: bold;
+      gap: 10px;
+      margin-bottom: 10px;
     }
 
-    .card-top input {
-      width: auto;
+    /* custom checkbox */
+    .band-checkbox {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 17px;
+      height: 17px;
+      border: 1.5px solid var(--border-2);
+      border-radius: 4px;
+      background: var(--surface-2);
+      cursor: pointer;
+      flex-shrink: 0;
+      position: relative;
+      transition: all 0.15s;
     }
 
-    .custom-box {
+    .band-checkbox:checked {
+      background: var(--gold);
+      border-color: var(--gold);
+    }
+
+    .band-checkbox:checked::after {
+      content: '';
+      position: absolute;
+      left: 4px;
+      top: 1px;
+      width: 5px;
+      height: 9px;
+      border: 2px solid #000;
+      border-top: none;
+      border-left: none;
+      transform: rotate(45deg);
+    }
+
+    .card-band-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: 0.01em;
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tier-select {
+      width: 100%;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-muted);
+      padding: 8px 10px;
+      font-size: 12px;
+      outline: none;
+      cursor: pointer;
+      transition: border-color 0.15s;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23555' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 28px;
+    }
+
+    .tier-select:focus {
+      border-color: var(--gold-dim);
+      color: var(--text);
+    }
+
+    .custom-input {
+      width: 100%;
+      margin-top: 8px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 12px;
+      outline: none;
+    }
+
+    .custom-input:focus {
+      border-color: var(--gold-dim);
+    }
+
+    /* ================================
+       ADD BAND ROW
+    ================================ */
+    .add-band-row {
       display: flex;
       gap: 10px;
-      margin-top: 20px;
+      margin-top: 14px;
     }
 
-    .status {
-      margin-top: 25px;
-      padding: 15px;
-      background: #202020;
-      border-radius: 10px;
-      text-align: center;
-      line-height: 1.6;
+    .add-band-row input {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--text);
+      padding: 10px 14px;
+      outline: none;
+      font-size: 13px;
+      transition: border-color 0.15s;
     }
 
-    a {
-      color: #1db954;
+    .add-band-row input:focus {
+      border-color: var(--border-2);
     }
 
-    @media (max-width: 600px) {
-  /* Trim the massive outer desktop padding so the app doesn't choke on small screens */
-  body {
-    padding: 15px 10px;
-  }
-  
-  .container {
-    padding: 15px;
-  }
+    .add-band-row input::placeholder {
+      color: var(--text-dim);
+    }
 
-  /* 🛠️ FIX FOR PLAYLIST NAME & DESCRIPTION: Force them to stack vertically */
-  .meta-row {
-    grid-template-columns: 1fr !important;
-    gap: 15px; /* Adds a clean gap between the two stacked inputs */
-  }
-
-  /* Force the grid to stay locked within the screen width while keeping your exact card look */
-  .band-grid {
-    grid-template-columns: 1fr; /* Lines cards up perfectly in a single column layout */
-    padding: 10px;
-  }
-}
-
+    /* ================================
+       OPTIONS ROW
+    ================================ */
     .options-row {
       display: flex;
-      gap: 12px;
-      justify-content: center;
-      margin-top: 20px;
+      gap: 10px;
+      margin-top: 18px;
       flex-wrap: wrap;
+      align-items: center;
     }
 
-    .btn-secondary.new-releases-active {
-      background: #1ed760;
-      color: black;
-      border-color: #1ed760;
-      font-weight: bold;
+    .sort-select {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      color: var(--text-muted);
+      padding: 9px 32px 9px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      outline: none;
+      cursor: pointer;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23555' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      transition: border-color 0.15s;
+    }
+
+    .sort-select:focus {
+      border-color: var(--border-2);
+    }
+
+    .btn-ghost.new-releases-active {
+      border-color: var(--gold);
+      color: var(--gold);
+      background: var(--gold-glow);
+    }
+
+    /* ================================
+       GENERATE BUTTON
+    ================================ */
+    .generate-wrap {
+      margin-top: 20px;
+    }
+
+    .btn-generate {
+      width: 100%;
+      border: none;
+      background: var(--gold);
+      color: #000;
+      font-family: var(--font-display);
+      font-size: 22px;
+      letter-spacing: 0.1em;
+      padding: 16px 28px;
+      border-radius: var(--radius-lg);
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    .btn-generate:hover {
+      background: #d4b55a;
+    }
+
+    .btn-generate:active {
+      transform: scale(0.99);
+    }
+
+    .btn-generate:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* ================================
+       STATUS
+    ================================ */
+    .status-box {
+      margin-top: 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 18px 20px;
+      text-align: center;
+      line-height: 1.8;
+      color: var(--text-muted);
+      font-size: 13px;
+      min-height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .status-box a {
+      color: var(--gold);
+      font-weight: 600;
+    }
+
+    /* ================================
+       DIVIDER
+    ================================ */
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 24px 0;
+    }
+
+    /* ================================
+       HIDDEN
+    ================================ */
+    .hidden {
+      display: none !important;
+    }
+
+    /* ================================
+       MOBILE
+    ================================ */
+    @media (max-width: 600px) {
+      .hero {
+        padding: 24px 14px 20px;
+      }
+
+      .app-shell {
+        padding: 16px 12px 50px;
+      }
+
+      .meta-row {
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+
+      .mode-toggle {
+        width: 100%;
+        margin-bottom: 20px;
+      }
+
+      .mode-btn {
+        flex: 1;
+        padding: 10px 8px;
+        font-size: 12px;
+        letter-spacing: 0.02em;
+      }
+
+      /* On mobile, band cards go full-width — easier to tap */
+      .band-grid {
+        grid-template-columns: 1fr;
+        max-height: 380px;
+        padding: 10px;
+        gap: 8px;
+      }
+
+      /* Bigger touch targets on cards */
+      .band-card {
+        padding: 14px 12px;
+      }
+
+      .band-checkbox {
+        width: 20px;
+        height: 20px;
+      }
+
+      .card-band-name {
+        font-size: 14px;
+      }
+
+      .tier-select {
+        padding: 10px 28px 10px 10px;
+        font-size: 13px;
+      }
+
+      .toolbar {
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .search-wrap {
+        min-width: 100%;
+        order: -1;
+      }
+
+      /* Select All / Clear go side by side */
+      #select-all, #clear-all {
+        flex: 1;
+        text-align: center;
+      }
+
+      .add-band-row input {
+        font-size: 14px;
+        padding: 12px 14px;
+      }
+
+      .options-row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+      }
+
+      .options-row .btn-ghost,
+      .options-row .sort-select {
+        width: 100%;
+        text-align: center;
+        padding: 12px 14px;
+        font-size: 13px;
+      }
+
+      .btn-generate {
+        font-size: 20px;
+        padding: 15px;
+        letter-spacing: 0.08em;
+      }
+
+      .connected-bar {
+        font-size: 12px;
+        padding: 10px 14px;
+      }
+
+      .status-box {
+        font-size: 13px;
+        padding: 16px;
+      }
+
+      .divider {
+        margin: 18px 0;
+      }
+    }
+
+    @media (max-width: 400px) {
+      .add-band-row {
+        flex-direction: column;
+      }
+
+      .hero-sub {
+        font-size: 10px;
+        letter-spacing: 0.14em;
+      }
     }
   </style>
 </head>
 
 <body>
 
-<div class="container">
+  <!-- HERO -->
+  <header class="hero">
+    <div class="hero-logo">SET<span>FLOW</span></div>
+    <p class="hero-sub">Festival & Tour Playlist Generator</p>
+  </header>
 
-  <h1>🎸 SetFlow</h1>
+  <main class="app-shell">
 
-  <p class="subtitle">
-    Build festival and tour playlists automatically.
-  </p>
-
-  <div id="auth-view">
-    <div style="text-align:center">
-      <button
-        id="login-btn"
-        class="btn"
-      >
-        Connect Spotify
-      </button>
-    </div>
-  </div>
-
-  <div
-    id="app-view"
-    class="hidden"
-  >
-
-    <div
-      id="welcome-msg"
-      style="
-        color:#1db954;
-        margin-bottom:20px;
-        font-weight:bold;
-      "
-    >
-      Connected
+    <!-- AUTH VIEW -->
+    <div id="auth-view">
+      <div class="auth-panel">
+        <p>Connect your Spotify account to start building<br>playlists from real live setlists.</p>
+        <button id="login-btn" class="btn">Connect Spotify</button>
+      </div>
     </div>
 
-    <div class="mode-row">
+    <!-- APP VIEW -->
+    <div id="app-view" class="hidden">
 
-      <button
-        id="festival-btn"
-        class="btn-secondary active"
-      >
-        Festival Mode
-      </button>
-
-      <button
-        id="tour-btn"
-        class="btn-secondary"
-      >
-        Tour Mode
-      </button>
-
-    </div>
-
-    <div class="meta-row">
-
-      <div>
-        <label>
-          Playlist Name
-        </label>
-
-        <input
-          id="playlist-name"
-          value="Festival Lineup Tape"
-        >
+      <!-- Connected bar -->
+      <div class="connected-bar">
+        <div class="connected-dot"></div>
+        <span>Spotify — </span>
+        <strong id="welcome-msg">Connected</strong>
       </div>
 
-      <div>
-        <label>
-          Playlist Description
-        </label>
+      <!-- Mode toggle -->
+      <div class="mode-toggle">
+        <button id="festival-btn" class="mode-btn active">Festival Mode</button>
+        <button id="tour-btn" class="mode-btn">Tour Mode</button>
+      </div>
 
-        <input
-          id="playlist-desc"
-          value="Generated by SetFlow"
-        >
+      <!-- Playlist meta -->
+      <div class="meta-row">
+        <div class="field-group">
+          <label>Playlist Name</label>
+          <input id="playlist-name" value="Festival Lineup Tape" />
+        </div>
+        <div class="field-group">
+          <label>Description</label>
+          <input id="playlist-desc" value="Generated by SetFlow" />
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Toolbar -->
+      <div class="toolbar">
+        <div class="search-wrap">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input id="catalog-search" placeholder="Search bands..." />
+        </div>
+        <button id="select-all" class="btn-ghost">Select All</button>
+        <button id="clear-all" class="btn-ghost">Clear</button>
+      </div>
+
+      <!-- Band grid -->
+      <div id="band-grid" class="band-grid"></div>
+
+      <!-- Add band -->
+      <div class="add-band-row">
+        <input id="new-band" placeholder="Add a band not in the list..." />
+        <button id="add-band" class="btn-ghost">Add</button>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Options -->
+      <div class="options-row">
+        <button id="new-releases-btn" class="btn-ghost" title="Adds the latest release for each selected band">
+          ✦ New Releases
+        </button>
+        <select id="sort-order" class="sort-select">
+          <option value="as-selected">Order: As Selected</option>
+          <option value="name-asc">Name A → Z</option>
+          <option value="name-desc">Name Z → A</option>
+          <option value="songs-asc">Fewest Songs First</option>
+          <option value="songs-desc">Most Songs First</option>
+        </select>
+      </div>
+
+      <!-- Generate -->
+      <div class="generate-wrap">
+        <button id="generate-btn" class="btn-generate">GENERATE PLAYLIST</button>
       </div>
 
     </div>
 
-    <div class="toolbar">
+    <!-- Status -->
+    <div id="status" class="status-box">Ready to build your setlist.</div>
 
-      <input
-        id="catalog-search"
-        placeholder="Search bands..."
-      >
+  </main>
 
-      <button
-        id="select-all"
-        class="btn-secondary"
-      >
-        All
-      </button>
-
-      <button
-        id="clear-all"
-        class="btn-secondary"
-      >
-        None
-      </button>
-
-    </div>
-
-    <div
-      id="band-grid"
-      class="band-grid"
-    >
-    </div>
-
-    <div class="custom-box">
-
-      <input
-        id="new-band"
-        placeholder="Add a missing band..."
-      >
-
-      <button
-        id="add-band"
-        class="btn-secondary"
-      >
-        Add
-      </button>
-
-    </div>
-
-    <div class="options-row">
-
-      <button
-        id="new-releases-btn"
-        class="btn-secondary"
-        title="Adds the latest release for each selected band"
-      >
-        ✦ Include New Releases
-      </button>
-
-      <select id="sort-order" style="padding:10px 14px;border-radius:8px;border:1px solid #444;background:#222;color:white;font-size:14px;cursor:pointer;">
-        <option value="as-selected">Order: As Selected</option>
-        <option value="name-asc">Order: Name A→Z</option>
-        <option value="name-desc">Order: Name Z→A</option>
-        <option value="songs-asc">Order: Fewest Songs First</option>
-        <option value="songs-desc">Order: Most Songs First</option>
-      </select>
-
-    </div>
-
-        <button
-      id="generate-btn"
-      class="btn"
-      style="
-        width:100%;
-        margin-top:25px;
-      "
-    >
-      Generate Playlist
-    </button>
-
-  </div>
-
-  <div
-    id="status"
-    class="status"
-  >
-    Waiting...
-  </div>
-
-</div>
-
-<script src="config.js"></script>
-<script src="script-part1.js"></script>
-<script src="script-part2.js"></script>
+  <script src="config.js"></script>
+  <script src="script-part1.js"></script>
+  <script src="script-part2.js"></script>
 
 </body>
 </html>

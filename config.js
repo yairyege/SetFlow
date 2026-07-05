@@ -1,14 +1,15 @@
 // ==========================
-// LIVE MIXTAPE STATION -- CONFIG (Live / GitHub Pages)
+// SETFLOW — CONFIG
 // ==========================
-// This version is safe to commit since it contains
-// no secret keys -- only the Spotify CLIENT_ID (public
-// by PKCE design) and the public Worker URL.
+// WARNING: This file is in .gitignore
+//          NEVER commit this to GitHub.
 // ==========================
 
 // --- Spotify ---
 const CLIENT_ID = '96ffdeb107d54909b65a95d930b40d04';
-const REDIRECT_URI = 'https://yairyege.github.io/SetFlow/index.html';
+const REDIRECT_URI = 'http://127.0.0.1:5500/index.html';
+// For the live GitHub Pages version use:
+// const REDIRECT_URI = 'https://yairyege.github.io/SetFlow/index.html';
 
 const SCOPES =
   'playlist-modify-public playlist-modify-private user-read-private';
@@ -17,6 +18,8 @@ const SPOTIFY_AUTH = 'https://accounts.spotify.com';
 const SPOTIFY_API  = 'https://api.spotify.com/v1';
 
 // --- Setlist.fm (via Cloudflare Worker) ---
-// The real setlist.fm key lives in the Worker's
-// encrypted environment variables, not here.
 const WORKER_URL = 'https://setflow.yairyeger.workers.dev';
+
+// --- Supabase band cache ---
+const SUPABASE_URL  = 'https://rgiwdjkmsegoypcnttks.supabase.co';
+const SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJnaXdkamttc2Vnb3lwY250dGtzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyNDI5MDAsImV4cCI6MjA5ODgxODkwMH0.IIC68PHR6DlPcgzSHJGq7DUPMUCQNe6kQudnwtwMbJA';

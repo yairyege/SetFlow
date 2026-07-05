@@ -16,32 +16,86 @@ const topTracksCache = {};
 // ==========================
 
 let MASTER_BANDS = [
+  // Big 4 / Legacy
   'Metallica',
-  'Parkway Drive',
-  'Architects',
-  'Slaughter To Prevail',
-  'Spiritbox',
   'Slipknot',
-  'Gojira',
-  'Linkin Park',
-  'Bring Me The Horizon',
-  'Korn',
   'System Of A Down',
+  'Korn',
   'Avenged Sevenfold',
   'Iron Maiden',
   'Judas Priest',
-  'Lamb of God',
-  'Ice Nine Kills',
-  'Motionless In White',
+  'Pantera',
+  'Rage Against The Machine',
+  'Tool',
+  'Deftones',
+  'Linkin Park',
+  'Limp Bizkit',
+  'Disturbed',
+  'Five Finger Death Punch',
+
+  // Modern Metal / Metalcore
+  'Bring Me The Horizon',
+  'Parkway Drive',
+  'Architects',
   'Trivium',
+  'Lamb of God',
+  'Mastodon',
+  'Gojira',
+  'Meshuggah',
+  'Periphery',
+  'While She Sleeps',
+  'Bullet For My Valentine',
+  'As I Lay Dying',
+  'August Burns Red',
+  'All That Remains',
+  'Killswitch Engage',
+
+  // New Wave / Scene
   'Sleep Token',
   'Bad Omens',
+  'Spiritbox',
   'Knocked Loose',
+  'Lorna Shore',
+  'Motionless In White',
+  'Ice Nine Kills',
+  'Slaughter To Prevail',
+  'Falling in Reverse',
   'I Prevail',
   'Papa Roach',
-  'Lorna Shore'
+  'Beartooth',
+  'Asking Alexandria',
+  'Of Mice & Men',
+  'Crown The Empire',
+  'Wage War',
+  'Code Orange',
+  'Spite',
 
-].sort();
+  // Post-Hardcore / Prog
+  'Architects',
+  'Northlane',
+  'Polyphia',
+  'Animals As Leaders',
+  'Intervals',
+  'Veil Of Maya',
+
+  // Deathcore / Blackened
+  'Whitechapel',
+  'Chelsea Grin',
+  'Thy Art Is Murder',
+  'Shadow Of Intent',
+  'Brand Of Sacrifice',
+  'Aborted',
+
+  // Rock crossover
+  'Turnstile',
+  'Grandson',
+  'Nothing Nowhere',
+  'Dead Poet Society',
+  'Bad Wolves',
+  'Starset',
+  'Palaye Royale',
+
+].filter((v, i, a) => a.indexOf(v) === i).sort();
 
 // ==========================
 // TIERS
@@ -365,20 +419,18 @@ function renderGrid() {
             class="band-checkbox"
             value="${band}"
           >
-
-          <span>${band}</span>
+          <span class="card-band-name">${band}</span>
         </div>
-
-        <select
-          class="tier-select"
-        >
+        <select class="tier-select">
           ${options}
         </select>
-
         <input
           class="custom-input hidden"
-          placeholder="Songs"
+          type="number"
+          placeholder="Number of songs"
           value="5"
+          min="1"
+          max="40"
         >
       `;
 
