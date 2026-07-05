@@ -750,12 +750,10 @@ async function getNewRelease(artistName) {
 async function resolveTracksForBand(artistName, amount) {
   status(`Checking setlists for ${artistName}...`);
 
-  // fetch the band's DB row once and reuse it everywhere
-  // so we don't make multiple Supabase calls per band
+  // 1. Fetch the band's DB row once at the start
   const cached = await dbGetBand(artistName);
 
   // --- FAST PATH: cached URIs exist ---
-  // return instantly with zero Spotify calls
   if (cached && cached.uris && cached.uris.length > 0) {
     console.log(
       `URI cache HIT ✅ "${artistName}": ${cached.uris.length} URIs, returning top ${amount}`
@@ -763,8 +761,7 @@ async function resolveTracksForBand(artistName, amount) {
     return cached.uris.slice(0, amount);
   }
 
-  // pre-populate the in-memory artist ID cache from DB
-  // so getArtistId never needs to call Spotify for this band
+  // Pre-populate the in-memory artist ID cache if we have the ID
   if (cached && cached.spotify_id) {
     artistCache[artistName] = cached.spotify_id;
   }
@@ -778,8 +775,6 @@ async function resolveTracksForBand(artistName, amount) {
     status(`Matching ${artistName} setlist songs on Spotify...`);
 
     for (const songName of setlistSongs) {
-      // fetch more than needed so we can cache a full set
-      // even if the user only requested a few songs this time
       if (tracks.length >= Math.max(amount, 20)) break;
 
       const key = songName.toLowerCase().trim();
@@ -798,7 +793,7 @@ async function resolveTracksForBand(artistName, amount) {
     console.log(`${artistName}: ${tracks.length} tracks matched from setlist.fm`);
   }
 
-  // top up from Spotify if short
+  // Top up from Spotify if short
   if (tracks.length < amount) {
     const stillNeed = amount - tracks.length;
 
@@ -825,23 +820,27 @@ async function resolveTracksForBand(artistName, amount) {
     return [];
   }
 
-  // --- SAVE URIs TO CACHE ---
-  // Use the row we already fetched at the top (no extra DB call)
-  if (cached) {
+  // --- FIX: SAVE URIs TO CACHE FOR BOTH NEW & EXISTING BANDS ---
+  // If the band was brand new, getSetlistSongs just inserted it. 
+  // We fetch the fresh row state so we have the valid mbid and songs array.
+  const targetRow = cached || await dbGetBand(artistName);
+
+  if (targetRow) {
     await dbSaveBand(
       artistName,
-      cached.mbid,
-      cached.songs,
-      cached.spotify_id,
-      cached.source,
-      tracks
+      targetRow.mbid,
+      targetRow.songs,
+      targetRow.spotify_id,
+      targetRow.source,
+      tracks // Permanently commits the resolved array of track objects
     );
+    console.log(`${artistName}: final ${tracks.length} tracks, URIs safely cached!`);
+  } else {
+    console.warn(`Could not save URIs: Band row missing from database initialization.`);
   }
 
-  console.log(`${artistName}: final ${tracks.length} tracks, URIs cached`);
-
   return tracks.slice(0, amount);
-}
+}}
 
 // ==========================
 // CREATE PLAYLIST
