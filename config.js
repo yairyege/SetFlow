@@ -9,7 +9,7 @@
 // --- Spotify ---
 // CLIENT_ID is safe to expose (PKCE OAuth is designed for this)
 const CLIENT_ID = '96ffdeb107d54909b65a95d930b40d04';
-const REDIRECT_URI = 'http://127.0.0.1:5500/index.html';
+const REDIRECT_URI = 'https://yairyege.github.io/SetFlow/index.html';
 // For the live GitHub Pages version use:
 // const REDIRECT_URI = 'https://yairyege.github.io/SetFlow/index.html';
 
