@@ -855,13 +855,11 @@ async function resolveTracksForBand(artistName, amount) {
     return cached.uris.slice(0, amount);
   }
 
-  // Pre-populate the in-memory artist ID cache if we have the ID
-  if (cached && cached.spotify_id) {
-    artistCache[artistName] = cached.spotify_id;
-  }
+  // Pre-populate memory cache if row has it, or resolve it exactly ONCE here
+  const artistId = await getArtistId(artistName, cached);
 
   // --- NO URI CACHE: resolve from setlist + Spotify ---
-  const setlistSongs = await getSetlistSongs(artistName);
+  const setlistSongs = await getSetlistSongs(artistName, cached);
   const tracks = [];
   const seenNames = new Set();
 
@@ -875,7 +873,8 @@ async function resolveTracksForBand(artistName, amount) {
       if (seenNames.has(key)) continue;
       seenNames.add(key);
 
-      const track = await findTrack(artistName, songName);
+      // Pass the locked-in artistId directly into the track finder
+      const track = await findTrack(artistName, songName, artistId);
 
       if (track) {
         tracks.push(track);
@@ -915,8 +914,8 @@ async function resolveTracksForBand(artistName, amount) {
   }
 
   // --- FIX: SAVE URIs TO CACHE FOR BOTH NEW & EXISTING BANDS ---
-  // If the band was brand new, getSetlistSongs just inserted it. 
-  // We fetch the fresh row state so we have the valid mbid and songs array.
+  // If the band was brand new, getSetlistSongs just created its base row.
+  // We grab the populated state so we have valid mbids/song arrays to merge against.
   const targetRow = cached || await dbGetBand(artistName);
 
   if (targetRow) {
@@ -924,17 +923,17 @@ async function resolveTracksForBand(artistName, amount) {
       artistName,
       targetRow.mbid,
       targetRow.songs,
-      targetRow.spotify_id,
+      targetRow.spotify_id || artistId,
       targetRow.source,
-      tracks // Permanently commits the resolved array of track objects
+      tracks
     );
     console.log(`${artistName}: final ${tracks.length} tracks, URIs safely cached!`);
   } else {
-    console.warn(`Could not save URIs: Band row missing from database initialization.`);
+    console.warn(`Could not save URIs: Database row configuration was missing.`);
   }
 
   return tracks.slice(0, amount);
-}}
+}}}
 
 // ==========================
 // CREATE PLAYLIST
