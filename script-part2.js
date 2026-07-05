@@ -344,6 +344,10 @@ async function getArtistId(artistName, cachedRow = null) {
   return artist.id;
 }
 
+// ==========================
+// SETLIST.FM — MOST PLAYED LIVE SONGS
+// ==========================
+
 async function getSetlistSongs(artistName, cachedRow = null) {
   // --- CACHE CHECK ---
   const cached = cachedRow || await dbGetBand(artistName);
@@ -455,135 +459,10 @@ async function getSetlistSongs(artistName, cachedRow = null) {
 }
 
 // ==========================
-// SETLIST.FM — MOST PLAYED LIVE SONGS
-//
-// Now cache-aware:
-//   1. Check Supabase first
-//   2. Cache hit → return instantly, zero setlist.fm calls
-//   3. Cache miss → fetch setlist.fm → save to Supabase
-// ==========================
-
-async function getSetlistSongs(artistName) {
-
-  // --- CACHE CHECK ---
-  const cached = await dbGetBand(artistName);
-
-  if (cached && cached.songs && cached.songs.length > 0) {
-    return cached.songs; // array of song name strings
-  }
-
-  // --- CACHE MISS: fetch from setlist.fm ---
-  try {
-    const searchRes = await setlistFetch(
-      setlistUrl(
-        `/search/artists?artistName=${encodeURIComponent(artistName)}&p=1&sort=relevance`
-      ),
-      { headers: { 'Accept': 'application/json' } }
-    );
-
-    if (!searchRes.ok) {
-      console.warn(`Setlist.fm search HTTP ${searchRes.status} for "${artistName}"`);
-      return [];
-    }
-
-    const searchData = await searchRes.json();
-    const artist = searchData.artist?.[0];
-
-    if (!artist) {
-      console.warn(`Setlist.fm: artist not found — "${artistName}"`);
-      return [];
-    }
-
-    console.log(`Setlist.fm artist: "${artist.name}" mbid=${artist.mbid}`);
-
-    // fetch page 1 and page 2 (~40 shows total)
-    const setlists = [];
-
-    for (const page of [1, 2]) {
-      const setlistRes = await setlistFetch(
-        setlistUrl(`/artist/${artist.mbid}/setlists?p=${page}`),
-        { headers: { 'Accept': 'application/json' } }
-      );
-
-      if (!setlistRes.ok) {
-        if (page === 1) {
-          console.warn(`Setlist.fm setlists HTTP ${setlistRes.status} for "${artistName}"`);
-          return [];
-        }
-        break;
-      }
-
-      const setlistData = await setlistRes.json();
-      const pageShows = setlistData.setlist || [];
-      if (!pageShows.length) break;
-      setlists.push(...pageShows);
-    }
-
-    if (!setlists.length) {
-      console.warn(`Setlist.fm: 0 setlists for "${artistName}"`);
-      return [];
-    }
-
-    const totalShows = setlists.length;
-    const playCount = {};
-    const originalName = {};
-
-    for (const show of setlists) {
-      for (const set of (show.sets?.set || [])) {
-        for (const song of (set.song || [])) {
-          if (!song.name || song.cover) continue;
-
-          const key = song.name.toLowerCase().trim();
-          if (!originalName[key]) originalName[key] = song.name.trim();
-          playCount[key] = (playCount[key] || 0) + 1;
-        }
-      }
-    }
-
-    if (!Object.keys(playCount).length) {
-      console.warn(`Setlist.fm: empty sets for "${artistName}"`);
-      return [];
-    }
-
-    // sort by consistency (% of shows) then raw count
-    const sorted = Object.entries(playCount)
-      .map(([key, count]) => ({
-        key,
-        count,
-        consistency: count / totalShows
-      }))
-      .sort((a, b) => {
-        if (b.consistency !== a.consistency) {
-          return b.consistency - a.consistency;
-        }
-        return b.count - a.count;
-      })
-      .map((entry) => originalName[entry.key]);
-
-    console.log(
-      `Setlist.fm "${artistName}": ${sorted.length} songs from ${totalShows} shows. Top 5: ${sorted.slice(0, 5).join(', ')}`
-    );
-
-    // --- SAVE TO CACHE ---
-    // get Spotify ID to store alongside the songs
-    const spotifyId = await getArtistId(artistName);
-    await dbSaveBand(artistName, artist.mbid, sorted, spotifyId, 'setlist');
-
-    return sorted;
-
-  } catch (err) {
-    console.warn(`Setlist.fm exception for "${artistName}": ${err.message}`);
-    return [];
-  }
-}
-
-// ==========================
 // SPOTIFY — FIND TRACK
 // ==========================
 
 async function findTrack(artistName, songName, artistId) {
-  // Remove the old intra-function getArtistId call
-
   function isAltVersion(name) {
     const lower = (name || '').toLowerCase();
     return (
@@ -655,7 +534,6 @@ async function findTrack(artistName, songName, artistId) {
   }
 
   return track;
- }
 }
 
 // ==========================
@@ -934,7 +812,7 @@ async function resolveTracksForBand(artistName, amount) {
   }
 
   return tracks.slice(0, amount);
-}}}
+}
 
 // ==========================
 // CREATE PLAYLIST
