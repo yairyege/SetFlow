@@ -19,13 +19,52 @@ function setlistUrl(path) {
 
 const CACHE_MAX_AGE_DAYS = 30;
 
-async function dbGetBand(name) {
-  try {
-    const key = name.toLowerCase().trim();
+// In-memory memo of DB rows for this session.
+// getArtistId, getSetlistSongs and resolveTracksForBand all
+// need the band row — this guarantees ONE Supabase GET per band
+// instead of 3 (which was hammering the Worker and causing 429s).
+const dbRowCache = new Map();
 
+// fetch wrapper for Worker/Supabase calls:
+// small gap between calls + automatic retry on 429
+let lastWorkerCall = 0;
+
+async function workerFetch(url, opts) {
+  const gap = Date.now() - lastWorkerCall;
+  if (gap < 150) await wait(150 - gap);
+  lastWorkerCall = Date.now();
+
+  let res = await fetch(url, opts);
+
+  if (res.status === 429) {
+    const retryAfter = parseInt(res.headers.get('Retry-After') || '3');
+    console.warn(`Worker/Supabase 429 — waiting ${retryAfter}s and retrying...`);
+    await wait(retryAfter * 1000);
+    lastWorkerCall = Date.now();
+    res = await fetch(url, opts);
+  }
+
+  return res;
+}
+
+async function dbGetBand(name) {
+  const key = name.toLowerCase().trim();
+
+  // memo hit — zero network calls
+  if (dbRowCache.has(key)) {
+    return dbRowCache.get(key);
+  }
+
+  const row = await dbGetBandUncached(name, key);
+  dbRowCache.set(key, row);
+  return row;
+}
+
+async function dbGetBandUncached(name, key) {
+  try {
     // calls go through the Cloudflare Worker
     // which holds SUPABASE_KEY server-side
-    const res = await fetch(
+    const res = await workerFetch(
       `${WORKER_URL}/supabase/bands?name=eq.${encodeURIComponent(key)}&select=*`
     );
 
@@ -74,9 +113,12 @@ async function dbSaveBand(name, mbid, songs, spotifyId, source, uris) {
     };
 
     // calls go through the Cloudflare Worker
-    // which holds SUPABASE_KEY server-side
-    const res = await fetch(
-      `${WORKER_URL}/supabase/bands`,
+    // which holds SUPABASE_KEY server-side.
+    // on_conflict=name makes merge-duplicates a real UPSERT keyed
+    // on the band name — without it, saving an existing band was
+    // failing silently with a duplicate-key conflict.
+    const res = await workerFetch(
+      `${WORKER_URL}/supabase/bands?on_conflict=name`,
       {
         method: 'POST',
         headers: {
@@ -91,7 +133,13 @@ async function dbSaveBand(name, mbid, songs, spotifyId, source, uris) {
       const errText = await res.text();
       console.warn(`Supabase SAVE failed: ${res.status} — ${errText}`);
     } else {
-      console.log(`Cache SAVED ✅ "${name}" (${songs.length} songs, source: ${source})`);
+      console.log(
+        `Cache SAVED ✅ "${name}" (${(songs || []).length} songs, ` +
+        `${(uris || []).length} URIs, source: ${source})`
+      );
+      // keep the in-memory memo in sync so later lookups
+      // in this session see the fresh row without a network call
+      dbRowCache.set(key, { ...payload });
     }
 
   } catch (err) {
@@ -132,51 +180,27 @@ async function setlistFetch(url, opts) {
 }
 
 // --- Spotify rate limiter ---
-// Enforces a minimum gap between Spotify API calls.
-// Tracks consecutive 429s and backs off exponentially.
+// Enforces a minimum gap between Spotify API calls
+// and retries automatically on 429.
+// Spotify's dev mode limit is roughly 30 req/s —
+// we use 300ms gap (≈3/s) for dev mode safety.
 let lastSpotifyCall = 0;
-let spotifyBackoff = 300;      // current gap in ms, starts at 300
-let spotify429Count = 0;       // consecutive 429 counter
 
 async function spotifyFetch(url, opts) {
   const gap = Date.now() - lastSpotifyCall;
-  if (gap < spotifyBackoff) await wait(spotifyBackoff - gap);
+  if (gap < 300) await wait(300 - gap);
   lastSpotifyCall = Date.now();
 
   let res = await fetch(url, opts);
 
   if (res.status === 429) {
-    spotify429Count++;
-
-    // read Retry-After header if Spotify sends one
-    const retryAfter = parseInt(res.headers.get('Retry-After') || '10');
-
-    // exponential backoff: each consecutive 429 doubles the gap
-    // up to a max of 10 seconds between calls
-    spotifyBackoff = Math.min(spotifyBackoff * 2, 10000);
-
-    console.warn(
-      `Spotify 429 (#${spotify429Count}) — waiting ${retryAfter}s, backoff now ${spotifyBackoff}ms`
-    );
-
-    await wait(retryAfter * 1000);
+    // check Retry-After header — Spotify sometimes sends it
+    const retryAfter = parseInt(res.headers.get('Retry-After') || '5');
+    const waitMs = retryAfter * 1000;
+    console.warn(`Spotify 429 — waiting ${retryAfter}s and retrying...`);
+    await wait(waitMs);
     lastSpotifyCall = Date.now();
-
     res = await fetch(url, opts);
-
-    // if still 429 after retry, return the 429 response
-    // so callers can handle it gracefully rather than
-    // hammering Spotify further
-    if (res.status !== 429) {
-      // successful call — slowly recover the backoff
-      spotifyBackoff = Math.max(spotifyBackoff / 2, 300);
-      spotify429Count = 0;
-    }
-  } else {
-    // successful call — slowly recover backoff
-    if (spotifyBackoff > 300) {
-      spotifyBackoff = Math.max(spotifyBackoff / 2, 300);
-    }
   }
 
   return res;
@@ -281,14 +305,15 @@ document
 // GET ARTIST ID (Spotify)
 // ==========================
 
-async function getArtistId(artistName, cachedRow = null) {
+async function getArtistId(artistName) {
   // 1. in-memory cache (fastest)
   if (artistCache[artistName]) {
     return artistCache[artistName];
   }
 
-  // 2. Use passed row or fall back to Supabase cache
-  const cached = cachedRow || await dbGetBand(artistName);
+  // 2. Supabase cache — if we already have this band's
+  //    spotify_id stored, use it with zero Spotify calls
+  const cached = await dbGetBand(artistName);
   if (cached && cached.spotify_id) {
     console.log(`Artist ID cache HIT ✅ "${artistName}": ${cached.spotify_id}`);
     artistCache[artistName] = cached.spotify_id;
@@ -346,14 +371,22 @@ async function getArtistId(artistName, cachedRow = null) {
 
 // ==========================
 // SETLIST.FM — MOST PLAYED LIVE SONGS
+//
+// Now cache-aware:
+//   1. Check Supabase first
+//   2. Cache hit → return instantly, zero setlist.fm calls
+//   3. Cache miss → fetch setlist.fm → save to Supabase
 // ==========================
 
-async function getSetlistSongs(artistName, cachedRow = null) {
-  // --- CACHE CHECK ---
-  const cached = cachedRow || await dbGetBand(artistName);
+// Returns { songs: string[], mbid: string|null }.
+// Receives the band's DB row (already fetched by the caller) —
+// it does NOT query the DB and does NOT save. The single save
+// happens once, in resolveTracksForBand, with the URIs included.
+async function getSetlistSongs(artistName, cached) {
 
+  // --- CACHE CHECK (row passed in, zero DB calls) ---
   if (cached && cached.songs && cached.songs.length > 0) {
-    return cached.songs; // array of song name strings
+    return { songs: cached.songs, mbid: cached.mbid || null };
   }
 
   // --- CACHE MISS: fetch from setlist.fm ---
@@ -367,7 +400,7 @@ async function getSetlistSongs(artistName, cachedRow = null) {
 
     if (!searchRes.ok) {
       console.warn(`Setlist.fm search HTTP ${searchRes.status} for "${artistName}"`);
-      return [];
+      return { songs: [], mbid: null };
     }
 
     const searchData = await searchRes.json();
@@ -375,11 +408,12 @@ async function getSetlistSongs(artistName, cachedRow = null) {
 
     if (!artist) {
       console.warn(`Setlist.fm: artist not found — "${artistName}"`);
-      return [];
+      return { songs: [], mbid: null };
     }
 
     console.log(`Setlist.fm artist: "${artist.name}" mbid=${artist.mbid}`);
 
+    // fetch page 1 and page 2 (~40 shows total)
     const setlists = [];
 
     for (const page of [1, 2]) {
@@ -391,7 +425,7 @@ async function getSetlistSongs(artistName, cachedRow = null) {
       if (!setlistRes.ok) {
         if (page === 1) {
           console.warn(`Setlist.fm setlists HTTP ${setlistRes.status} for "${artistName}"`);
-          return [];
+          return { songs: [], mbid: null };
         }
         break;
       }
@@ -404,7 +438,7 @@ async function getSetlistSongs(artistName, cachedRow = null) {
 
     if (!setlists.length) {
       console.warn(`Setlist.fm: 0 setlists for "${artistName}"`);
-      return [];
+      return { songs: [], mbid: null };
     }
 
     const totalShows = setlists.length;
@@ -425,9 +459,10 @@ async function getSetlistSongs(artistName, cachedRow = null) {
 
     if (!Object.keys(playCount).length) {
       console.warn(`Setlist.fm: empty sets for "${artistName}"`);
-      return [];
+      return { songs: [], mbid: null };
     }
 
+    // sort by consistency (% of shows) then raw count
     const sorted = Object.entries(playCount)
       .map(([key, count]) => ({
         key,
@@ -443,18 +478,16 @@ async function getSetlistSongs(artistName, cachedRow = null) {
       .map((entry) => originalName[entry.key]);
 
     console.log(
-      `Setlist.fm "${artistName}": ${sorted.length} songs from ${totalShows} shows.`
+      `Setlist.fm "${artistName}": ${sorted.length} songs from ${totalShows} shows. Top 5: ${sorted.slice(0, 5).join(', ')}`
     );
 
-    // --- SAVE TO CACHE ---
-    const spotifyId = await getArtistId(artistName, cached);
-    await dbSaveBand(artistName, artist.mbid, sorted, spotifyId, 'setlist');
-
-    return sorted;
+    // NOTE: no save here — resolveTracksForBand performs
+    // the single save (songs + spotify_id + URIs together).
+    return { songs: sorted, mbid: artist.mbid || null };
 
   } catch (err) {
     console.warn(`Setlist.fm exception for "${artistName}": ${err.message}`);
-    return [];
+    return { songs: [], mbid: null };
   }
 }
 
@@ -462,21 +495,26 @@ async function getSetlistSongs(artistName, cachedRow = null) {
 // SPOTIFY — FIND TRACK
 // ==========================
 
-async function findTrack(artistName, songName, artistId) {
+async function findTrack(artistName, songName) {
+  const artistId = await getArtistId(artistName);
+
+  // Returns true if a track name looks like a duet,
+  // remix, or featured version — we prefer the original.
   function isAltVersion(name) {
     const lower = (name || '').toLowerCase();
     return (
-      / feat\.? /.test(lower) ||
-      / ft\.? /.test(lower) ||
-      / with .{1,30} version /.test(lower) ||
-      / remix /.test(lower) ||
-      / edit /.test(lower) ||
-      / sped up /.test(lower) ||
-      / slowed /.test(lower)
+      /\bfeat\.?\b/.test(lower) ||
+      /\bft\.?\b/.test(lower) ||
+      /\bwith\b.{1,30}\bversion\b/.test(lower) ||
+      /\bremix\b/.test(lower) ||
+      /\bedit\b/.test(lower) ||
+      /\bsped up\b/.test(lower) ||
+      /\bslowed\b/.test(lower)
     );
   }
 
   async function searchTrack(q) {
+    // fetch 10 candidates so we can pick the best one
     const params = new URLSearchParams({
       q,
       type: 'track',
@@ -493,6 +531,7 @@ async function findTrack(artistName, songName, artistId) {
     const data = await res.json();
     const items = data.tracks?.items || [];
 
+    // filter: correct artist, not live, not an alt version
     const candidates = items.filter((t) => {
       if (isLiveTrack(t.name)) return false;
       if (isLiveTrack(t.album?.name)) return false;
@@ -508,11 +547,14 @@ async function findTrack(artistName, songName, artistId) {
 
     if (!candidates.length) return null;
 
+    // prefer non-alt versions, sort by popularity descending
+    // so we always get the highest-streamed original
     const originals = candidates.filter(
       (t) => !isAltVersion(t.name)
     );
 
     const pool = originals.length ? originals : candidates;
+
     pool.sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
 
     const best = pool[0];
@@ -525,10 +567,12 @@ async function findTrack(artistName, songName, artistId) {
     };
   }
 
+  // precise search first
   let track = await searchTrack(
     `track:"${songName}" artist:"${artistName}"`
   );
 
+  // looser search if precise returns nothing
   if (!track) {
     track = await searchTrack(`${songName} ${artistName}`);
   }
@@ -723,10 +767,12 @@ async function getNewRelease(artistName) {
 async function resolveTracksForBand(artistName, amount) {
   status(`Checking setlists for ${artistName}...`);
 
-  // 1. Fetch the band's DB row once at the start
+  // fetch the band's DB row once and reuse it everywhere
+  // so we don't make multiple Supabase calls per band
   const cached = await dbGetBand(artistName);
 
   // --- FAST PATH: cached URIs exist ---
+  // return instantly with zero Spotify calls
   if (cached && cached.uris && cached.uris.length > 0) {
     console.log(
       `URI cache HIT ✅ "${artistName}": ${cached.uris.length} URIs, returning top ${amount}`
@@ -734,11 +780,17 @@ async function resolveTracksForBand(artistName, amount) {
     return cached.uris.slice(0, amount);
   }
 
-  // Pre-populate memory cache if row has it, or resolve it exactly ONCE here
-  const artistId = await getArtistId(artistName, cached);
+  // pre-populate the in-memory artist ID cache from DB
+  // so getArtistId never needs to call Spotify for this band
+  if (cached && cached.spotify_id) {
+    artistCache[artistName] = cached.spotify_id;
+  }
 
   // --- NO URI CACHE: resolve from setlist + Spotify ---
-  const setlistSongs = await getSetlistSongs(artistName, cached);
+  // pass the row we already fetched — getSetlistSongs makes
+  // zero DB calls of its own now
+  const setlistResult = await getSetlistSongs(artistName, cached);
+  const setlistSongs = setlistResult.songs;
   const tracks = [];
   const seenNames = new Set();
 
@@ -746,14 +798,15 @@ async function resolveTracksForBand(artistName, amount) {
     status(`Matching ${artistName} setlist songs on Spotify...`);
 
     for (const songName of setlistSongs) {
+      // fetch more than needed so we can cache a full set
+      // even if the user only requested a few songs this time
       if (tracks.length >= Math.max(amount, 20)) break;
 
       const key = songName.toLowerCase().trim();
       if (seenNames.has(key)) continue;
       seenNames.add(key);
 
-      // Pass the locked-in artistId directly into the track finder
-      const track = await findTrack(artistName, songName, artistId);
+      const track = await findTrack(artistName, songName);
 
       if (track) {
         tracks.push(track);
@@ -765,7 +818,7 @@ async function resolveTracksForBand(artistName, amount) {
     console.log(`${artistName}: ${tracks.length} tracks matched from setlist.fm`);
   }
 
-  // Top up from Spotify if short
+  // top up from Spotify if short
   if (tracks.length < amount) {
     const stillNeed = amount - tracks.length;
 
@@ -792,24 +845,26 @@ async function resolveTracksForBand(artistName, amount) {
     return [];
   }
 
-  // --- FIX: SAVE URIs TO CACHE FOR BOTH NEW & EXISTING BANDS ---
-  // If the band was brand new, getSetlistSongs just created its base row.
-  // We grab the populated state so we have valid mbids/song arrays to merge against.
-  const targetRow = cached || await dbGetBand(artistName);
+  // --- SAVE URIs TO CACHE ---
+  // Single save per band. Works for NEW bands (cached === null)
+  // and EXISTING bands alike — this was the bug: the old code
+  // only saved when `cached` existed, so first-run bands never
+  // got their URIs (or spotify_id) stored.
+  const spotifyId =
+    artistCache[artistName] ||        // populated by getArtistId during matching
+    (cached && cached.spotify_id) ||  // or from the old row
+    null;
 
-  if (targetRow) {
-    await dbSaveBand(
-      artistName,
-      targetRow.mbid,
-      targetRow.songs,
-      targetRow.spotify_id || artistId,
-      targetRow.source,
-      tracks
-    );
-    console.log(`${artistName}: final ${tracks.length} tracks, URIs safely cached!`);
-  } else {
-    console.warn(`Could not save URIs: Database row configuration was missing.`);
-  }
+  await dbSaveBand(
+    artistName,
+    setlistResult.mbid || (cached && cached.mbid) || null,
+    setlistSongs.length ? setlistSongs : ((cached && cached.songs) || []),
+    spotifyId,
+    setlistSongs.length ? 'setlist' : 'spotify',
+    tracks
+  );
+
+  console.log(`${artistName}: final ${tracks.length} tracks, URIs cached`);
 
   return tracks.slice(0, amount);
 }
