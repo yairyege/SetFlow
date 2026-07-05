@@ -25,9 +25,11 @@ const CACHE_MAX_AGE_DAYS = 30;
 // instead of 3 (which was hammering the Worker and causing 429s).
 const dbRowCache = new Map();
 
+
 // fetch wrapper for Worker/Supabase calls:
 // small gap between calls + automatic retry on 429
 let lastWorkerCall = 0;
+let spotifyBackoff = 300; // current baseline gap in ms
 
 async function workerFetch(url, opts) {
   const gap = Date.now() - lastWorkerCall;
