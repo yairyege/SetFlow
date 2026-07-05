@@ -258,10 +258,21 @@ document
 // ==========================
 
 async function getArtistId(artistName) {
+  // 1. in-memory cache (fastest)
   if (artistCache[artistName]) {
     return artistCache[artistName];
   }
 
+  // 2. Supabase cache — if we already have this band's
+  //    spotify_id stored, use it with zero Spotify calls
+  const cached = await dbGetBand(artistName);
+  if (cached && cached.spotify_id) {
+    console.log(`Artist ID cache HIT ✅ "${artistName}": ${cached.spotify_id}`);
+    artistCache[artistName] = cached.spotify_id;
+    return cached.spotify_id;
+  }
+
+  // 3. Fall back to Spotify API only if not cached
   async function trySearch(query) {
     const params = new URLSearchParams({
       q: query,
@@ -709,18 +720,23 @@ async function getNewRelease(artistName) {
 async function resolveTracksForBand(artistName, amount) {
   status(`Checking setlists for ${artistName}...`);
 
-  // --- CHECK FOR CACHED URIs FIRST ---
-  // If Supabase already has matched Spotify URIs for this band,
-  // return them instantly — zero Spotify API calls needed.
+  // fetch the band's DB row once and reuse it everywhere
+  // so we don't make multiple Supabase calls per band
   const cached = await dbGetBand(artistName);
 
+  // --- FAST PATH: cached URIs exist ---
+  // return instantly with zero Spotify calls
   if (cached && cached.uris && cached.uris.length > 0) {
     console.log(
       `URI cache HIT ✅ "${artistName}": ${cached.uris.length} URIs, returning top ${amount}`
     );
-
-    // uris are stored as [{uri, name, artistName}] objects
     return cached.uris.slice(0, amount);
+  }
+
+  // pre-populate the in-memory artist ID cache from DB
+  // so getArtistId never needs to call Spotify for this band
+  if (cached && cached.spotify_id) {
+    artistCache[artistName] = cached.spotify_id;
   }
 
   // --- NO URI CACHE: resolve from setlist + Spotify ---
@@ -780,18 +796,15 @@ async function resolveTracksForBand(artistName, amount) {
   }
 
   // --- SAVE URIs TO CACHE ---
-  // Store the full matched URI list in Supabase so next time
-  // this band is requested we skip all Spotify matching entirely.
-  const existingRow = await dbGetBand(artistName);
-  if (existingRow) {
-    // band row exists (from setlist cache) — update it with uris
+  // Use the row we already fetched at the top (no extra DB call)
+  if (cached) {
     await dbSaveBand(
       artistName,
-      existingRow.mbid,
-      existingRow.songs,
-      existingRow.spotify_id,
-      existingRow.source,
-      tracks  // full track objects {uri, name, artistName}
+      cached.mbid,
+      cached.songs,
+      cached.spotify_id,
+      cached.source,
+      tracks
     );
   }
 
