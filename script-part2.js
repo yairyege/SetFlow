@@ -655,6 +655,7 @@ async function findTrack(artistName, songName, artistId) {
   }
 
   return track;
+ }
 }
 
 // ==========================
