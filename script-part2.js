@@ -281,15 +281,14 @@ document
 // GET ARTIST ID (Spotify)
 // ==========================
 
-async function getArtistId(artistName) {
+async function getArtistId(artistName, cachedRow = null) {
   // 1. in-memory cache (fastest)
   if (artistCache[artistName]) {
     return artistCache[artistName];
   }
 
-  // 2. Supabase cache — if we already have this band's
-  //    spotify_id stored, use it with zero Spotify calls
-  const cached = await dbGetBand(artistName);
+  // 2. Use passed row or fall back to Supabase cache
+  const cached = cachedRow || await dbGetBand(artistName);
   if (cached && cached.spotify_id) {
     console.log(`Artist ID cache HIT ✅ "${artistName}": ${cached.spotify_id}`);
     artistCache[artistName] = cached.spotify_id;
@@ -343,6 +342,116 @@ async function getArtistId(artistName) {
   console.log(`Spotify artist: "${artist.name}" id=${artist.id}`);
   artistCache[artistName] = artist.id;
   return artist.id;
+}
+
+async function getSetlistSongs(artistName, cachedRow = null) {
+  // --- CACHE CHECK ---
+  const cached = cachedRow || await dbGetBand(artistName);
+
+  if (cached && cached.songs && cached.songs.length > 0) {
+    return cached.songs; // array of song name strings
+  }
+
+  // --- CACHE MISS: fetch from setlist.fm ---
+  try {
+    const searchRes = await setlistFetch(
+      setlistUrl(
+        `/search/artists?artistName=${encodeURIComponent(artistName)}&p=1&sort=relevance`
+      ),
+      { headers: { 'Accept': 'application/json' } }
+    );
+
+    if (!searchRes.ok) {
+      console.warn(`Setlist.fm search HTTP ${searchRes.status} for "${artistName}"`);
+      return [];
+    }
+
+    const searchData = await searchRes.json();
+    const artist = searchData.artist?.[0];
+
+    if (!artist) {
+      console.warn(`Setlist.fm: artist not found — "${artistName}"`);
+      return [];
+    }
+
+    console.log(`Setlist.fm artist: "${artist.name}" mbid=${artist.mbid}`);
+
+    const setlists = [];
+
+    for (const page of [1, 2]) {
+      const setlistRes = await setlistFetch(
+        setlistUrl(`/artist/${artist.mbid}/setlists?p=${page}`),
+        { headers: { 'Accept': 'application/json' } }
+      );
+
+      if (!setlistRes.ok) {
+        if (page === 1) {
+          console.warn(`Setlist.fm setlists HTTP ${setlistRes.status} for "${artistName}"`);
+          return [];
+        }
+        break;
+      }
+
+      const setlistData = await setlistRes.json();
+      const pageShows = setlistData.setlist || [];
+      if (!pageShows.length) break;
+      setlists.push(...pageShows);
+    }
+
+    if (!setlists.length) {
+      console.warn(`Setlist.fm: 0 setlists for "${artistName}"`);
+      return [];
+    }
+
+    const totalShows = setlists.length;
+    const playCount = {};
+    const originalName = {};
+
+    for (const show of setlists) {
+      for (const set of (show.sets?.set || [])) {
+        for (const song of (set.song || [])) {
+          if (!song.name || song.cover) continue;
+
+          const key = song.name.toLowerCase().trim();
+          if (!originalName[key]) originalName[key] = song.name.trim();
+          playCount[key] = (playCount[key] || 0) + 1;
+        }
+      }
+    }
+
+    if (!Object.keys(playCount).length) {
+      console.warn(`Setlist.fm: empty sets for "${artistName}"`);
+      return [];
+    }
+
+    const sorted = Object.entries(playCount)
+      .map(([key, count]) => ({
+        key,
+        count,
+        consistency: count / totalShows
+      }))
+      .sort((a, b) => {
+        if (b.consistency !== a.consistency) {
+          return b.consistency - a.consistency;
+        }
+        return b.count - a.count;
+      })
+      .map((entry) => originalName[entry.key]);
+
+    console.log(
+      `Setlist.fm "${artistName}": ${sorted.length} songs from ${totalShows} shows.`
+    );
+
+    // --- SAVE TO CACHE ---
+    const spotifyId = await getArtistId(artistName, cached);
+    await dbSaveBand(artistName, artist.mbid, sorted, spotifyId, 'setlist');
+
+    return sorted;
+
+  } catch (err) {
+    console.warn(`Setlist.fm exception for "${artistName}": ${err.message}`);
+    return [];
+  }
 }
 
 // ==========================
@@ -472,21 +581,19 @@ async function getSetlistSongs(artistName) {
 // SPOTIFY — FIND TRACK
 // ==========================
 
-async function findTrack(artistName, songName) {
-  const artistId = await getArtistId(artistName);
+async function findTrack(artistName, songName, artistId) {
+  // Remove the old intra-function getArtistId call
 
-  // Returns true if a track name looks like a duet,
-  // remix, or featured version — we prefer the original.
   function isAltVersion(name) {
     const lower = (name || '').toLowerCase();
     return (
-      /feat\.?/.test(lower) ||
-      /ft\.?/.test(lower) ||
-      /with.{1,30}version/.test(lower) ||
-      /remix/.test(lower) ||
-      /edit/.test(lower) ||
-      /sped up/.test(lower) ||
-      /slowed/.test(lower)
+      / feat\.? /.test(lower) ||
+      / ft\.? /.test(lower) ||
+      / with .{1,30} version /.test(lower) ||
+      / remix /.test(lower) ||
+      / edit /.test(lower) ||
+      / sped up /.test(lower) ||
+      / slowed /.test(lower)
     );
   }
 
@@ -502,19 +609,11 @@ async function findTrack(artistName, songName) {
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
 
-    // if still rate limited after retry, bail out completely
-    // so we stop hammering Spotify with more requests
-    if (res.status === 429) {
-      console.warn('Spotify still 429 after retry — skipping track search');
-      return null;
-    }
-
     if (!res.ok) return null;
 
     const data = await res.json();
     const items = data.tracks?.items || [];
 
-    // filter: correct artist, not live, not an alt version
     const candidates = items.filter((t) => {
       if (isLiveTrack(t.name)) return false;
       if (isLiveTrack(t.album?.name)) return false;
@@ -530,14 +629,11 @@ async function findTrack(artistName, songName) {
 
     if (!candidates.length) return null;
 
-    // prefer non-alt versions, sort by popularity descending
-    // so we always get the highest-streamed original
     const originals = candidates.filter(
       (t) => !isAltVersion(t.name)
     );
 
     const pool = originals.length ? originals : candidates;
-
     pool.sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
 
     const best = pool[0];
@@ -550,18 +646,16 @@ async function findTrack(artistName, songName) {
     };
   }
 
-  // precise search first
   let track = await searchTrack(
     `track:"${songName}" artist:"${artistName}"`
   );
 
-  // looser search if precise returns nothing
   if (!track) {
     track = await searchTrack(`${songName} ${artistName}`);
   }
 
   return track;
-}
+}}
 
 // ==========================
 // SPOTIFY FALLBACK —
