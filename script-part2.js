@@ -132,27 +132,51 @@ async function setlistFetch(url, opts) {
 }
 
 // --- Spotify rate limiter ---
-// Enforces a minimum gap between Spotify API calls
-// and retries automatically on 429.
-// Spotify's dev mode limit is roughly 30 req/s —
-// we use 300ms gap (≈3/s) for dev mode safety.
+// Enforces a minimum gap between Spotify API calls.
+// Tracks consecutive 429s and backs off exponentially.
 let lastSpotifyCall = 0;
+let spotifyBackoff = 300;      // current gap in ms, starts at 300
+let spotify429Count = 0;       // consecutive 429 counter
 
 async function spotifyFetch(url, opts) {
   const gap = Date.now() - lastSpotifyCall;
-  if (gap < 300) await wait(300 - gap);
+  if (gap < spotifyBackoff) await wait(spotifyBackoff - gap);
   lastSpotifyCall = Date.now();
 
   let res = await fetch(url, opts);
 
   if (res.status === 429) {
-    // check Retry-After header — Spotify sometimes sends it
-    const retryAfter = parseInt(res.headers.get('Retry-After') || '5');
-    const waitMs = retryAfter * 1000;
-    console.warn(`Spotify 429 — waiting ${retryAfter}s and retrying...`);
-    await wait(waitMs);
+    spotify429Count++;
+
+    // read Retry-After header if Spotify sends one
+    const retryAfter = parseInt(res.headers.get('Retry-After') || '10');
+
+    // exponential backoff: each consecutive 429 doubles the gap
+    // up to a max of 10 seconds between calls
+    spotifyBackoff = Math.min(spotifyBackoff * 2, 10000);
+
+    console.warn(
+      `Spotify 429 (#${spotify429Count}) — waiting ${retryAfter}s, backoff now ${spotifyBackoff}ms`
+    );
+
+    await wait(retryAfter * 1000);
     lastSpotifyCall = Date.now();
+
     res = await fetch(url, opts);
+
+    // if still 429 after retry, return the 429 response
+    // so callers can handle it gracefully rather than
+    // hammering Spotify further
+    if (res.status !== 429) {
+      // successful call — slowly recover the backoff
+      spotifyBackoff = Math.max(spotifyBackoff / 2, 300);
+      spotify429Count = 0;
+    }
+  } else {
+    // successful call — slowly recover backoff
+    if (spotifyBackoff > 300) {
+      spotifyBackoff = Math.max(spotifyBackoff / 2, 300);
+    }
   }
 
   return res;
@@ -467,7 +491,6 @@ async function findTrack(artistName, songName) {
   }
 
   async function searchTrack(q) {
-    // fetch 10 candidates so we can pick the best one
     const params = new URLSearchParams({
       q,
       type: 'track',
@@ -478,6 +501,13 @@ async function findTrack(artistName, songName) {
       `${SPOTIFY_API}/search?${params}`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
+
+    // if still rate limited after retry, bail out completely
+    // so we stop hammering Spotify with more requests
+    if (res.status === 429) {
+      console.warn('Spotify still 429 after retry — skipping track search');
+      return null;
+    }
 
     if (!res.ok) return null;
 
