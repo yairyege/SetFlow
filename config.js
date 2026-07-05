@@ -22,4 +22,4 @@ const WORKER_URL = 'https://setflow.yairyeger.workers.dev';
 
 // --- Supabase band cache ---
 const SUPABASE_URL  = 'https://rgiwdjkmsegoypcnttks.supabase.co';
-const SUPABASE_KEY  = '';
+const SUPABASE_KEY  = 'https://setflow.yairyeger.workers.dev';
