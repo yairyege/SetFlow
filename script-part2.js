@@ -97,13 +97,14 @@ async function dbSaveBand(name, mbid, songs, spotifyId, source) {
 }
 
 // ==========================
-// RATE LIMITER + 429 RETRY
+// RATE LIMITERS + 429 RETRY
 // ==========================
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// --- Setlist.fm rate limiter ---
 let lastSetlistCall = 0;
 
 async function setlistFetch(url, opts) {
@@ -122,6 +123,33 @@ async function setlistFetch(url, opts) {
     if (res.status === 429) {
       console.warn('Setlist.fm still 429 after retry — falling back to Spotify');
     }
+  }
+
+  return res;
+}
+
+// --- Spotify rate limiter ---
+// Enforces a minimum gap between Spotify API calls
+// and retries automatically on 429.
+// Spotify's dev mode limit is roughly 30 req/s —
+// we use 120ms gap (≈8/s) for safety headroom.
+let lastSpotifyCall = 0;
+
+async function spotifyFetch(url, opts) {
+  const gap = Date.now() - lastSpotifyCall;
+  if (gap < 120) await wait(120 - gap);
+  lastSpotifyCall = Date.now();
+
+  let res = await fetch(url, opts);
+
+  if (res.status === 429) {
+    // check Retry-After header — Spotify sometimes sends it
+    const retryAfter = parseInt(res.headers.get('Retry-After') || '5');
+    const waitMs = retryAfter * 1000;
+    console.warn(`Spotify 429 — waiting ${retryAfter}s and retrying...`);
+    await wait(waitMs);
+    lastSpotifyCall = Date.now();
+    res = await fetch(url, opts);
   }
 
   return res;
@@ -238,7 +266,7 @@ async function getArtistId(artistName) {
       limit: '3'
     });
 
-    const res = await fetch(
+    const res = await spotifyFetch(
       `${SPOTIFY_API}/search?${params}`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
@@ -432,7 +460,7 @@ async function findTrack(artistName, songName) {
       limit: '10'
     });
 
-    const res = await fetch(
+    const res = await spotifyFetch(
       `${SPOTIFY_API}/search?${params}`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
@@ -520,7 +548,7 @@ async function getSpotifyFallbackTracks(artistName, needed) {
       offset: String(offset)
     });
 
-    const res = await fetch(
+    const res = await spotifyFetch(
       `${SPOTIFY_API}/search?${params}`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
@@ -566,7 +594,7 @@ async function getSpotifyFallbackTracks(artistName, needed) {
       limit: '10'
     });
 
-    const res = await fetch(
+    const res = await spotifyFetch(
       `${SPOTIFY_API}/search?${params}`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
@@ -610,7 +638,7 @@ async function getNewRelease(artistName) {
   const artistId = await getArtistId(artistName);
   if (!artistId) return null;
 
-  const res = await fetch(
+  const res = await spotifyFetch(
     `${SPOTIFY_API}/artists/${artistId}/albums?include_groups=album,single&limit=10&offset=0`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
@@ -641,7 +669,7 @@ async function getNewRelease(artistName) {
 
   const latest = recentAlbums[0];
 
-  const tracksRes = await fetch(
+  const tracksRes = await spotifyFetch(
     `${SPOTIFY_API}/albums/${latest.id}/tracks?limit=5`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
@@ -740,7 +768,7 @@ async function resolveTracksForBand(artistName, amount) {
 // ==========================
 
 async function createPlaylist(name, description) {
-  const res = await fetch(
+  const res = await spotifyFetch(
     `${SPOTIFY_API}/me/playlists`,
     {
       method: 'POST',
@@ -764,7 +792,7 @@ async function addTracks(playlistId, uris) {
   if (!uris.length) return;
 
   for (let i = 0; i < uris.length; i += 100) {
-    await fetch(
+    await spotifyFetch(
       `${SPOTIFY_API}/playlists/${playlistId}/items`,
       {
         method: 'POST',
