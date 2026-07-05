@@ -188,24 +188,41 @@ let lastSpotifyCall = 0;
 
 async function spotifyFetch(url, opts) {
   const gap = Date.now() - lastSpotifyCall;
-  if (gap < 300) await wait(300 - gap);
+  if (gap < spotifyBackoff) await wait(spotifyBackoff - gap);
   lastSpotifyCall = Date.now();
 
   let res = await fetch(url, opts);
 
+  // --- YOUR RATE LIMIT HANDLING LOGIC TRANSLATED TO JAVASCRIPT ---
   if (res.status === 429) {
-    // check Retry-After header — Spotify sometimes sends it
-    const retryAfter = parseInt(res.headers.get('Retry-After') || '5');
-    const waitMs = retryAfter * 1000;
-    console.warn(`Spotify 429 — waiting ${retryAfter}s and retrying...`);
-    await wait(waitMs);
+    // Get the wait time from headers (default to 30 seconds if missing)
+    const waitTime = parseInt(res.headers.get("Retry-After") || "30", 10);
+    
+    // Formats current local time as HH:MM:SS
+    const timestamp = new Date().toLocaleTimeString([], { hour12: false });
+    
+    console.warn(`${timestamp} | Rate limited. Sleeping for ${waitTime}s`);
+    
+    // Pause execution asynchronously
+    await wait(waitTime * 1000);
+    
+    // Retry the request here
     lastSpotifyCall = Date.now();
     res = await fetch(url, opts);
+    
+    // Check if retry succeeded, reset backoff
+    if (res.status !== 429) {
+      spotifyBackoff = 300;
+    }
+  } else {
+    // Successful call — slowly recover the baseline backoff gap
+    if (spotifyBackoff > 300) {
+      spotifyBackoff = Math.max(spotifyBackoff / 2, 300);
+    }
   }
 
   return res;
 }
-
 // ==========================
 // LIVE VERSION FILTER
 // ==========================
