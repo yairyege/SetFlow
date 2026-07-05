@@ -1,4 +1,5 @@
-// WORKER_URL, SUPABASE_URL, SUPABASE_KEY loaded from config.js
+// WORKER_URL loaded from config.js
+// SUPABASE_URL and SUPABASE_KEY live in the Cloudflare Worker env vars
 
 function setlistUrl(path) {
   return `${WORKER_URL}/setlist${path}`;
@@ -22,15 +23,10 @@ async function dbGetBand(name) {
   try {
     const key = name.toLowerCase().trim();
 
+    // calls go through the Cloudflare Worker
+    // which holds SUPABASE_KEY server-side
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/bands?name=eq.${encodeURIComponent(key)}&select=*`,
-      {
-        headers: {
-          'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${SUPABASE_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
+      `${WORKER_URL}/supabase/bands?name=eq.${encodeURIComponent(key)}&select=*`
     );
 
     if (!res.ok) {
@@ -43,7 +39,6 @@ async function dbGetBand(name) {
 
     const row = rows[0];
 
-    // check freshness — if older than 30 days, treat as stale
     const updatedAt = new Date(row.updated_at);
     const ageMs = Date.now() - updatedAt.getTime();
     const ageDays = ageMs / (1000 * 60 * 60 * 24);
@@ -75,14 +70,13 @@ async function dbSaveBand(name, mbid, songs, spotifyId, source) {
       updated_at: new Date().toISOString()
     };
 
-    // upsert — insert if new, update if exists
+    // calls go through the Cloudflare Worker
+    // which holds SUPABASE_KEY server-side
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/bands`,
+      `${WORKER_URL}/supabase/bands`,
       {
         method: 'POST',
         headers: {
-          'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${SUPABASE_KEY}`,
           'Content-Type': 'application/json',
           'Prefer': 'resolution=merge-duplicates'
         },
