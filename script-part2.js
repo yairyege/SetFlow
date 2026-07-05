@@ -57,7 +57,7 @@ async function dbGetBand(name) {
   }
 }
 
-async function dbSaveBand(name, mbid, songs, spotifyId, source) {
+async function dbSaveBand(name, mbid, songs, spotifyId, source, uris) {
   try {
     const key = name.toLowerCase().trim();
 
@@ -67,7 +67,10 @@ async function dbSaveBand(name, mbid, songs, spotifyId, source) {
       songs: songs,
       spotify_id: spotifyId || null,
       source: source || 'setlist',
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
+      // store matched Spotify URIs so we never need to
+      // re-match song names → URIs for cached bands
+      uris: uris || null
     };
 
     // calls go through the Cloudflare Worker
@@ -132,12 +135,12 @@ async function setlistFetch(url, opts) {
 // Enforces a minimum gap between Spotify API calls
 // and retries automatically on 429.
 // Spotify's dev mode limit is roughly 30 req/s —
-// we use 120ms gap (≈8/s) for safety headroom.
+// we use 300ms gap (≈3/s) for dev mode safety.
 let lastSpotifyCall = 0;
 
 async function spotifyFetch(url, opts) {
   const gap = Date.now() - lastSpotifyCall;
-  if (gap < 120) await wait(120 - gap);
+  if (gap < 300) await wait(300 - gap);
   lastSpotifyCall = Date.now();
 
   let res = await fetch(url, opts);
@@ -706,6 +709,21 @@ async function getNewRelease(artistName) {
 async function resolveTracksForBand(artistName, amount) {
   status(`Checking setlists for ${artistName}...`);
 
+  // --- CHECK FOR CACHED URIs FIRST ---
+  // If Supabase already has matched Spotify URIs for this band,
+  // return them instantly — zero Spotify API calls needed.
+  const cached = await dbGetBand(artistName);
+
+  if (cached && cached.uris && cached.uris.length > 0) {
+    console.log(
+      `URI cache HIT ✅ "${artistName}": ${cached.uris.length} URIs, returning top ${amount}`
+    );
+
+    // uris are stored as [{uri, name, artistName}] objects
+    return cached.uris.slice(0, amount);
+  }
+
+  // --- NO URI CACHE: resolve from setlist + Spotify ---
   const setlistSongs = await getSetlistSongs(artistName);
   const tracks = [];
   const seenNames = new Set();
@@ -714,7 +732,9 @@ async function resolveTracksForBand(artistName, amount) {
     status(`Matching ${artistName} setlist songs on Spotify...`);
 
     for (const songName of setlistSongs) {
-      if (tracks.length >= amount) break;
+      // fetch more than needed so we can cache a full set
+      // even if the user only requested a few songs this time
+      if (tracks.length >= Math.max(amount, 20)) break;
 
       const key = songName.toLowerCase().trim();
       if (seenNames.has(key)) continue;
@@ -729,7 +749,7 @@ async function resolveTracksForBand(artistName, amount) {
       }
     }
 
-    console.log(`${artistName}: ${tracks.length}/${amount} from setlist.fm`);
+    console.log(`${artistName}: ${tracks.length} tracks matched from setlist.fm`);
   }
 
   // top up from Spotify if short
@@ -752,13 +772,30 @@ async function resolveTracksForBand(artistName, amount) {
       existingUris.add(t.uri);
       tracks.push(t);
     }
-
-    console.log(`${artistName}: final ${tracks.length}/${amount} tracks`);
   }
 
   if (!tracks.length) {
     console.warn(`${artistName}: found nothing. Check spelling.`);
+    return [];
   }
+
+  // --- SAVE URIs TO CACHE ---
+  // Store the full matched URI list in Supabase so next time
+  // this band is requested we skip all Spotify matching entirely.
+  const existingRow = await dbGetBand(artistName);
+  if (existingRow) {
+    // band row exists (from setlist cache) — update it with uris
+    await dbSaveBand(
+      artistName,
+      existingRow.mbid,
+      existingRow.songs,
+      existingRow.spotify_id,
+      existingRow.source,
+      tracks  // full track objects {uri, name, artistName}
+    );
+  }
+
+  console.log(`${artistName}: final ${tracks.length} tracks, URIs cached`);
 
   return tracks.slice(0, amount);
 }
