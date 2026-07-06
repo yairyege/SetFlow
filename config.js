@@ -2,14 +2,13 @@
 // SETFLOW — CONFIG
 // ==========================
 // This file is safe to commit to GitHub.
-// No secrets live here anymore —
-// all API keys are in the Cloudflare Worker.
+// No secrets live here — all API keys
+// are in the Cloudflare Worker env vars.
 // ==========================
 
 // --- Spotify ---
-// CLIENT_ID is safe to expose (PKCE OAuth is designed for this)
 const CLIENT_ID = '4173f0358956439f9489d0c4a5041f15';
-const REDIRECT_URI = 'https://yairyege.github.io/SetFlow/index.html';
+const REDIRECT_URI = 'http://127.0.0.1:5500/index.html';
 // For the live GitHub Pages version use:
 // const REDIRECT_URI = 'https://yairyege.github.io/SetFlow/index.html';
 
