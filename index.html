@@ -138,21 +138,6 @@
     }
 
     /* ================================
-       AUTH VIEW
-    ================================ */
-    .auth-panel {
-      text-align: center;
-      padding: 60px 20px;
-    }
-
-    .auth-panel p {
-      color: var(--text-muted);
-      margin-bottom: 28px;
-      font-size: 15px;
-      line-height: 1.7;
-    }
-
-    /* ================================
        CONNECTED BAR
     ================================ */
     .connected-bar {
@@ -175,6 +160,11 @@
       background: var(--spotify);
       flex-shrink: 0;
       box-shadow: 0 0 6px var(--spotify);
+    }
+
+    .connected-dot.off {
+      background: var(--text-dim);
+      box-shadow: none;
     }
 
     .connected-bar span {
@@ -556,6 +546,109 @@
     /* ================================
        OPTIONS ROW
     ================================ */
+    /* ================================
+       FEATURE PANEL
+    ================================ */
+    .feature-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      margin-bottom: 18px;
+    }
+
+    .feature-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 13px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .feature-row:last-child {
+      border-bottom: none;
+    }
+
+    .feature-soon {
+      opacity: 0.45;
+    }
+
+    .feature-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .feature-desc {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .feature-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .mini-select {
+      background: var(--gold-glow);
+      border: 1px solid var(--gold-dim);
+      border-radius: var(--radius-sm);
+      color: var(--gold);
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      outline: none;
+      cursor: pointer;
+      appearance: none;
+    }
+
+    /* toggle switch */
+    .toggle {
+      width: 38px;
+      height: 22px;
+      border-radius: 20px;
+      background: var(--surface-3);
+      position: relative;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.18s;
+    }
+
+    .toggle-knob {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--text-dim);
+      transition: left 0.18s, background 0.18s;
+    }
+
+    .toggle.toggle-on {
+      background: var(--gold);
+    }
+
+    .toggle.toggle-on .toggle-knob {
+      left: 19px;
+      background: #000;
+    }
+
+    .soon-pill {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      border: 1px solid var(--border-2);
+      border-radius: 20px;
+      padding: 3px 9px;
+      flex-shrink: 0;
+    }
+
     .options-row {
       display: flex;
       gap: 10px;
@@ -624,6 +717,232 @@
       opacity: 0.35;
       cursor: not-allowed;
       transform: none;
+    }
+
+    /* ================================
+       PREVIEW PANEL
+    ================================ */
+    .preview-panel {
+      margin-top: 24px;
+      background: var(--surface);
+      border: 1px solid var(--gold-dim);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .preview-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--gold-glow);
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+
+    .preview-summary {
+      font-family: var(--font-display);
+      font-size: 22px;
+      letter-spacing: 0.06em;
+      color: var(--text);
+      line-height: 1.1;
+    }
+
+    .preview-list {
+      max-height: 440px;
+      overflow-y: auto;
+      padding: 6px 0 10px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-2) transparent;
+    }
+
+    .preview-list::-webkit-scrollbar {
+      width: 5px;
+    }
+
+    .preview-list::-webkit-scrollbar-thumb {
+      background: var(--border-2);
+      border-radius: 3px;
+    }
+
+    .preview-band-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 18px 6px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+
+    .preview-band-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .preview-tag {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      padding: 2px 7px;
+      border-radius: 20px;
+      text-transform: uppercase;
+    }
+
+    .tag-setlist {
+      border: 1px solid var(--gold-dim);
+      color: var(--gold);
+      background: var(--gold-glow);
+    }
+
+    .tag-top {
+      border: 1px solid var(--border-2);
+      color: var(--text-muted);
+      background: var(--surface-2);
+    }
+
+    .preview-plays {
+      flex-shrink: 0;
+      font-size: 11px;
+      color: var(--text-dim);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .preview-plays-new {
+      color: var(--gold);
+    }
+
+    .preview-count {
+      color: var(--text-dim);
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+
+    .preview-head-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .preview-coverage {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      text-transform: none;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .preview-track {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 18px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      color: var(--text-muted);
+      transition: background 0.12s, color 0.12s;
+    }
+
+    .preview-track:hover {
+      background: var(--surface-2);
+      color: var(--text);
+    }
+
+    .preview-band:last-child .preview-track:last-child {
+      border-bottom: none;
+    }
+
+    .preview-track-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .preview-new {
+      color: var(--gold);
+    }
+
+    .export-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-export {
+      border: 1px solid var(--border-2);
+      background: var(--surface-2);
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 9px 14px;
+      border-radius: var(--radius-xl);
+      cursor: pointer;
+      letter-spacing: 0.02em;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+
+    .btn-export:hover {
+      border-color: var(--gold-dim);
+      color: var(--gold);
+      background: var(--gold-glow);
+    }
+
+    .btn-export-ico {
+      margin-right: 3px;
+    }
+
+    .preview-verify {
+      color: var(--spotify);
+      font-size: 12px;
+      font-weight: 700;
+      text-decoration: none;
+      flex-shrink: 0;
+      width: 16px;
+      text-align: center;
+      transition: transform 0.12s;
+    }
+
+    a.preview-verify:hover {
+      transform: scale(1.25);
+      text-decoration: none;
+    }
+
+    .preview-unmatched {
+      color: var(--text-dim);
+      font-size: 11px;
+      flex-shrink: 0;
+      width: 16px;
+      text-align: center;
+    }
+
+    .preview-remove {
+      border: none;
+      background: transparent;
+      color: var(--text-dim);
+      font-size: 13px;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: var(--radius-sm);
+      transition: color 0.12s, background 0.12s;
+      flex-shrink: 0;
+    }
+
+    .preview-remove:hover {
+      color: var(--red);
+      background: var(--surface-3);
     }
 
     /* ================================
@@ -738,6 +1057,10 @@
         text-align: center;
       }
 
+      #genre-filter {
+        flex: 1 1 100%;
+      }
+
       .add-band-row input {
         font-size: 14px;
         padding: 12px 14px;
@@ -801,22 +1124,16 @@
 
   <main class="app-shell">
 
-    <!-- AUTH VIEW -->
-    <div id="auth-view">
-      <div class="auth-panel">
-        <p>Connect your Spotify account to start building<br>playlists from real live setlists.</p>
-        <button id="login-btn" class="btn">Connect Spotify</button>
-      </div>
-    </div>
-
-    <!-- APP VIEW -->
-    <div id="app-view" class="hidden">
+    <!-- APP VIEW — visible from the start, no login wall.
+         Spotify sign-in only happens when the user hits
+         "Sync to Spotify" in the preview panel. -->
+    <div id="app-view">
 
       <!-- Connected bar -->
       <div class="connected-bar">
-        <div class="connected-dot"></div>
+        <div id="connected-dot" class="connected-dot off"></div>
         <span>Spotify — </span>
-        <strong id="welcome-msg">Connected</strong>
+        <strong id="welcome-msg">Not connected — you’ll sign in when syncing</strong>
       </div>
 
       <!-- Mode toggle -->
@@ -847,6 +1164,9 @@
           </svg>
           <input id="catalog-search" placeholder="Search bands..." />
         </div>
+        <select id="genre-filter" class="sort-select">
+          <option value="all" selected>All Genres</option>
+        </select>
         <button id="select-all" class="btn-ghost">Select All</button>
         <button id="clear-all" class="btn-ghost">Clear</button>
       </div>
@@ -862,23 +1182,86 @@
 
       <div class="divider"></div>
 
+      <!-- Feature options panel — grows over time -->
+      <div class="section-label">Setlist Options</div>
+      <div class="feature-panel">
+
+        <div class="feature-row">
+          <div class="feature-info">
+            <div class="feature-name">Setlist stats</div>
+            <div class="feature-desc">Show how often each song is played live</div>
+          </div>
+          <div id="stats-toggle" class="toggle"><span class="toggle-knob"></span></div>
+        </div>
+
+        <div class="feature-row">
+          <div class="feature-info">
+            <div class="feature-name">This tour only</div>
+            <div class="feature-desc">Use one year's shows instead of all-time</div>
+          </div>
+          <div class="feature-controls">
+            <select id="tour-year" class="mini-select hidden"></select>
+            <div id="tour-toggle" class="toggle"><span class="toggle-knob"></span></div>
+          </div>
+        </div>
+
+        <div class="feature-row feature-soon">
+          <div class="feature-info">
+            <div class="feature-name">Rarity score</div>
+            <div class="feature-desc">Flag deep cuts &amp; rare live songs</div>
+          </div>
+          <span class="soon-pill">Soon</span>
+        </div>
+
+        <div class="feature-row feature-soon">
+          <div class="feature-info">
+            <div class="feature-name">Festival clash finder</div>
+            <div class="feature-desc">Overlay set times against your picks</div>
+          </div>
+          <span class="soon-pill">Soon</span>
+        </div>
+
+      </div>
+
       <!-- Options -->
       <div class="options-row">
         <button id="new-releases-btn" class="btn-ghost" title="Adds the latest release for each selected band">
           ✦ New Releases
         </button>
         <select id="sort-order" class="sort-select">
+          <option value="songs-asc" selected>Fewest Songs First</option>
+          <option value="songs-desc">Most Songs First</option>
           <option value="as-selected">Order: As Selected</option>
           <option value="name-asc">Name A → Z</option>
           <option value="name-desc">Name Z → A</option>
-          <option value="songs-asc">Fewest Songs First</option>
-          <option value="songs-desc">Most Songs First</option>
         </select>
       </div>
 
-      <!-- Generate -->
+      <!-- Build (no login needed) -->
       <div class="generate-wrap">
-        <button id="generate-btn" class="btn-generate">GENERATE PLAYLIST</button>
+        <button id="build-btn" class="btn-generate">BUILD SETLIST</button>
+      </div>
+
+      <!-- Preview panel — filled by renderPreview() -->
+      <div id="preview-panel" class="preview-panel hidden">
+        <div class="preview-head">
+          <div>
+            <div class="section-label">Your Setlist</div>
+            <div id="preview-summary" class="preview-summary">0 songs</div>
+          </div>
+          <div class="export-actions">
+            <button id="export-pdf" class="btn-export" title="Save as a printable PDF">
+              <span class="btn-export-ico">⤓</span> PDF
+            </button>
+            <button id="export-link" class="btn-export" title="Copy a shareable link">
+              <span class="btn-export-ico">🔗</span> Link
+            </button>
+            <button id="sync-btn" class="btn" title="Create this playlist in your Spotify">
+              Spotify
+            </button>
+          </div>
+        </div>
+        <div id="preview-list" class="preview-list"></div>
       </div>
 
     </div>
@@ -888,6 +1271,7 @@
 
   </main>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="config.js"></script>
   <script src="script-part1.js"></script>
   <script src="script-part2.js"></script>

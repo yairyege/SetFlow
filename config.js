@@ -7,8 +7,8 @@
 // ==========================
 
 // --- Spotify ---
-const CLIENT_ID = '4173f0358956439f9489d0c4a5041f15';
-const REDIRECT_URI = 'https://yairyege.github.io/SetFlow/index.html';
+const CLIENT_ID = '2e153e438ab24c99869d2230580f4472';
+const REDIRECT_URI = 'http://127.0.0.1:5500/index.html';
 // For the live GitHub Pages version use:
 // const REDIRECT_URI = 'https://yairyege.github.io/SetFlow/index.html';
 
