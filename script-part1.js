@@ -259,6 +259,49 @@ function getBandGenre(band) {
   return BAND_GENRES[band] || 'Other';
 }
 
+// Case-insensitive lookup of an existing band's canonical name, so a
+// saved "gojira" doesn't duplicate a hardcoded "Gojira".
+function findExistingBand(name) {
+  const lower = name.toLowerCase();
+  return MASTER_BANDS.find((b) => b.toLowerCase() === lower) || null;
+}
+
+// Merge bands saved in Supabase (custom ones added in past sessions)
+// into MASTER_BANDS + BAND_GENRES so they show up in the grid on load.
+// dbGetAllBands lives in script-part2.js. Safe if it returns nothing.
+async function mergeSavedBands() {
+  if (typeof dbGetAllBands !== 'function') return;
+
+  let saved = [];
+  try {
+    saved = await dbGetAllBands();
+  } catch {
+    return;
+  }
+  if (!saved.length) return;
+
+  let added = 0;
+  saved.forEach((row) => {
+    if (!row || !row.name) return;
+
+    // skip if we already have this band (case-insensitive)
+    if (findExistingBand(row.name)) return;
+
+    // Supabase stores names lowercase; title-case for display
+    const display = row.name.replace(/\b\w/g, (c) => c.toUpperCase());
+    const genre = row.genre || 'Added by me';
+
+    MASTER_BANDS.push(display);
+    BAND_GENRES[display] = genre;
+    added++;
+  });
+
+  if (added > 0) {
+    console.log(`Merged ${added} saved band(s) from Supabase into the grid.`);
+    renderGrid();
+  }
+}
+
 // ==========================
 // TIERS
 // ==========================
@@ -410,6 +453,10 @@ async function loadProfile() {
 async function boot() {
   renderGrid();
   setConnectedUI(false);
+
+  // fold in custom bands saved in past sessions (non-blocking — the
+  // grid already rendered above; these merge in when the fetch returns)
+  mergeSavedBands();
 
   // shared setlist link → render it read-only and stop.
   //   #id=<slug>  short link, fetched from Supabase
@@ -571,6 +618,11 @@ function renderGrid() {
       custom.classList.toggle('hidden', select.value !== 'custom');
     });
   });
+
+  // a rebuild resets DOM order — re-apply the user's active sort and
+  // any search/genre filter so they aren't silently cleared
+  if (typeof applyBandSort === 'function') applyBandSort();
+  if (typeof applyGridFilters === 'function') applyGridFilters();
 }
 
 // ==========================
@@ -622,3 +674,39 @@ function applyGridFilters() {
 }
 
 document.getElementById('catalog-search').addEventListener('input', applyGridFilters);
+
+// ==========================
+// BAND SORT
+//
+// Reorders the existing card elements in place rather than rebuilding
+// the grid — so every checkbox/tier selection is preserved. "By Genre"
+// restores the original MASTER_BANDS order (genre-grouped); A→Z / Z→A
+// sort purely by band name and flatten the groups.
+// ==========================
+
+function applyBandSort() {
+  const grid = document.getElementById('band-grid');
+  const sortEl = document.getElementById('band-sort');
+  const mode = sortEl ? sortEl.value : 'genre';
+
+  const cards = Array.from(grid.querySelectorAll('.band-card'));
+
+  cards.sort((a, b) => {
+    const nameA = a.querySelector('.band-checkbox').value;
+    const nameB = b.querySelector('.band-checkbox').value;
+
+    if (mode === 'az') return nameA.localeCompare(nameB);
+    if (mode === 'za') return nameB.localeCompare(nameA);
+
+    // 'genre' → original MASTER_BANDS order (genre-grouped)
+    return MASTER_BANDS.indexOf(nameA) - MASTER_BANDS.indexOf(nameB);
+  });
+
+  // re-append in new order (moving existing nodes keeps their state)
+  cards.forEach((card) => grid.appendChild(card));
+}
+
+const bandSortEl = document.getElementById('band-sort');
+if (bandSortEl) {
+  bandSortEl.addEventListener('change', applyBandSort);
+}

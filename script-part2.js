@@ -28,6 +28,26 @@ function spotifyAppUrl(path) {
 
 const CACHE_MAX_AGE_DAYS = 30;
 
+// Fetch every saved band's name + genre from Supabase, so custom bands
+// added in past sessions reappear in the grid instead of needing re-entry.
+// Lightweight: only pulls name + genre columns, not full song data.
+async function dbGetAllBands() {
+  try {
+    const res = await fetch(
+      `${WORKER_URL}/supabase/bands?select=name,genre`
+    );
+    if (!res.ok) {
+      console.warn(`Supabase GET all bands failed: ${res.status}`);
+      return [];
+    }
+    const rows = await res.json();
+    return rows || [];
+  } catch (err) {
+    console.warn(`Supabase GET all bands exception: ${err.message}`);
+    return [];
+  }
+}
+
 async function dbGetBand(name) {
   try {
     const key = name.toLowerCase().trim();
@@ -64,7 +84,7 @@ async function dbGetBand(name) {
   }
 }
 
-async function dbSaveBand(name, mbid, songs, spotifyId, source, uris) {
+async function dbSaveBand(name, mbid, songs, spotifyId, source, uris, genre) {
   try {
     const key = name.toLowerCase().trim();
 
@@ -77,6 +97,10 @@ async function dbSaveBand(name, mbid, songs, spotifyId, source, uris) {
       updated_at: new Date().toISOString(),
       uris: uris || null
     };
+
+    // only include genre if provided — keeps existing rows untouched
+    // when a save doesn't specify one
+    if (genre) payload.genre = genre;
 
     const res = await fetch(
       `${WORKER_URL}/supabase/bands`,
@@ -104,6 +128,38 @@ async function dbSaveBand(name, mbid, songs, spotifyId, source, uris) {
   }
 }
 
+// Lightweight upsert of just a band's name + genre. Used when you add a
+// custom band before it's ever built — records the category so it
+// reappears next session. Uses merge-duplicates so it won't clobber the
+// songs/uris of a band that already has data.
+async function dbSaveBandGenre(name, genre) {
+  try {
+    const key = name.toLowerCase().trim();
+    const res = await fetch(
+      `${WORKER_URL}/supabase/bands`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Prefer': 'resolution=merge-duplicates'
+        },
+        body: JSON.stringify({
+          name: key,
+          genre: genre || 'Added by me',
+          updated_at: new Date().toISOString()
+        })
+      }
+    );
+    if (res.ok) {
+      console.log(`Band category saved: "${name}" → ${genre}`);
+    } else {
+      console.warn(`Save band genre failed: ${res.status}`);
+    }
+  } catch (err) {
+    console.warn(`Save band genre exception: ${err.message}`);
+  }
+}
+
 // ==========================
 // RATE LIMITERS + ADVANCED RETRY ENGINE
 // ==========================
@@ -122,15 +178,28 @@ async function setlistFetch(url, opts) {
 
   let res = await fetch(url, opts);
 
-  if (res.status === 429) {
-    console.warn('Setlist.fm 429 — waiting 6s and retrying...');
-    await wait(6000);
+  // setlist.fm rate-limits more readily than Spotify but recovers fast.
+  // Retry up to twice, honoring the Retry-After header when present,
+  // with a growing fallback wait. Most 429s clear on the first retry.
+  let attempt = 0;
+  while (res.status === 429 && attempt < 2) {
+    attempt++;
+    const retryAfter = parseInt(res.headers.get('Retry-After') || '0');
+    // header value (seconds) if given, else escalating fallback: 6s, 12s
+    const waitMs = retryAfter > 0
+      ? Math.min(retryAfter * 1000, 30000)
+      : attempt * 6000;
+
+    console.warn(
+      `Setlist.fm 429 — waiting ${Math.round(waitMs / 1000)}s and retrying (attempt ${attempt}/2)...`
+    );
+    await wait(waitMs);
     lastSetlistCall = Date.now();
     res = await fetch(url, opts);
+  }
 
-    if (res.status === 429) {
-      console.warn('Setlist.fm still 429 — falling back to Spotify');
-    }
+  if (res.status === 429) {
+    console.warn('Setlist.fm still rate-limited after retries — this band may need a moment.');
   }
 
   return res;
@@ -147,7 +216,32 @@ let spotify429Count = 0;
 // of burning pacing delays on calls that can only fail.
 let spotifyAppUnavailable = false;
 
+// Hard rate-limit cooldown: trips when Spotify returns a large
+// Retry-After (a real penalty, not a blip). While active, Spotify
+// calls short-circuit so we never freeze the app or dig the hole
+// deeper. Cached setlists/URIs keep working the whole time.
+let spotifyRateLimited = false;
+let spotifyCooldownUntil = 0;
+
+function spotifyOnCooldown() {
+  if (!spotifyRateLimited) return false;
+  if (Date.now() >= spotifyCooldownUntil) {
+    // penalty window elapsed — clear it and allow calls again
+    spotifyRateLimited = false;
+    spotifyCooldownUntil = 0;
+    console.log('✅ Spotify cooldown elapsed — resuming normal calls.');
+    return false;
+  }
+  return true;
+}
+
 async function spotifyFetch(url, opts = {}, maxAttempts = 3) {
+  // hard cooldown active → don't even try; let callers fall back to cache
+  if (spotifyOnCooldown()) {
+    const mins = Math.ceil((spotifyCooldownUntil - Date.now()) / 60000);
+    throw new Error(`Spotify on cooldown (~${mins} min left)`);
+  }
+
   let attempt = 0;
 
   while (attempt < maxAttempts) {
@@ -185,6 +279,23 @@ async function spotifyFetch(url, opts = {}, maxAttempts = 3) {
       if (res.status === 429) {
         spotify429Count++;
         const retryAfter = parseInt(res.headers.get('Retry-After') || '5');
+
+        // A large Retry-After means we've hit a HARD rate limit, not a
+        // momentary blip. Waiting it out (could be hours) would freeze
+        // the app. Instead: trip a session cooldown so all further
+        // Spotify calls short-circuit, and bail out of this request.
+        // Setlist data still loads from cache; only URI matching pauses.
+        if (retryAfter > 120) {
+          spotifyRateLimited = true;
+          spotifyCooldownUntil = Date.now() + retryAfter * 1000;
+          console.warn(
+            `⛔ Spotify HARD rate limit — Retry-After ${retryAfter}s (` +
+            `${Math.round(retryAfter / 60)} min). Pausing ALL Spotify calls ` +
+            `for this session. Cached setlists still work; try URI matching ` +
+            `again later. Do NOT keep rebuilding — it extends the penalty.`
+          );
+          return res;
+        }
 
         // Force a wide safety padding for all subsequent requests
         // in this run. This breaks the rapid-fire cycle that trips
@@ -278,7 +389,11 @@ function normalizeSongEntries(songs) {
 let includeNewReleases = false;
 let showSetlistStats = true;   // coverage % + per-song frequency
 let tourYearOnly = false;      // scope setlists to one year
+let recentInOrder = false;     // single most-recent show, in played order
 let selectedYear = null;       // chosen in the picker
+let setlistOnly = true;        // DEFAULT SAFE: setlist-only, zero Spotify calls
+let warmingInProgress = false; // true only during a deliberate warmCache run
+let spotifyModeOn = false;     // master Spotify toggle — inverse of setlistOnly
 
 document
   .getElementById('new-releases-btn')
@@ -303,18 +418,79 @@ if (statsToggle) {
   });
 }
 
-// --- Tour-year toggle + picker ---
-const tourToggle = document.getElementById('tour-toggle');
-const yearPicker = document.getElementById('tour-year');
+// --- MASTER SPOTIFY TOGGLE (off by default, never remembered) ---
+// Off  → setlistOnly = true  → builds run on setlist.fm + cache, ZERO Spotify.
+// On   → setlistOnly = false → builds match songs to Spotify (rate-limitable).
+// Always starts OFF on every load so you can never accidentally hit Spotify.
+const spotifyToggle = document.getElementById('spotify-toggle');
+const spotifyBar = document.getElementById('spotify-bar');
+const spotifyBarState = document.getElementById('spotify-bar-state');
 
-if (tourToggle) {
-  tourToggle.addEventListener('click', () => {
-    tourYearOnly = !tourYearOnly;
-    tourToggle.classList.toggle('toggle-on', tourYearOnly);
-    if (yearPicker) yearPicker.classList.toggle('hidden', !tourYearOnly);
-    console.log(`Tour-year only: ${tourYearOnly ? 'ON' : 'OFF'}`);
+function applySpotifyMode() {
+  setlistOnly = !spotifyModeOn;
+  if (spotifyToggle) spotifyToggle.classList.toggle('toggle-on', spotifyModeOn);
+  if (spotifyBar) spotifyBar.classList.toggle('on', spotifyModeOn);
+  if (spotifyBarState) spotifyBarState.textContent = spotifyModeOn ? 'on' : 'off';
+
+  const desc = spotifyBar?.querySelector('.spotify-bar-desc');
+  if (desc) {
+    desc.textContent = spotifyModeOn
+      ? 'On — songs will be matched to Spotify so you can sync a playlist. Uses your Spotify quota.'
+      : 'Off — building runs on live setlists only, never rate-limited. Turn on to match & sync songs to Spotify.';
+  }
+
+  applySetlistOnlyUI();
+  // reflect resolve/sync availability in any open preview
+  if (previewTracks.length) renderPreview();
+  console.log(`Spotify mode: ${spotifyModeOn ? 'ON' : 'OFF'} (setlistOnly=${setlistOnly})`);
+}
+
+if (spotifyToggle) {
+  spotifyToggle.addEventListener('click', () => {
+    spotifyModeOn = !spotifyModeOn;
+    applySpotifyMode();
   });
 }
+
+// reflect the mode in the build button + Spotify sync/resolve availability
+function applySetlistOnlyUI() {
+  const buildBtn = document.getElementById('build-btn');
+  const syncBtn = document.getElementById('sync-btn');
+  if (buildBtn) {
+    buildBtn.textContent = setlistOnly ? 'SHOW SETLISTS' : 'BUILD SETLIST';
+  }
+  if (syncBtn) {
+    // Sync needs at least one Spotify-matched (URI) track AND Spotify mode on.
+    const hasResolved = previewTracks.some((t) => t.uri);
+    const canSync = spotifyModeOn && hasResolved;
+    syncBtn.disabled = !canSync;
+    syncBtn.title = !spotifyModeOn
+      ? 'Turn on Spotify mode to sync'
+      : (hasResolved ? 'Create this playlist in your Spotify' : 'Resolve songs to Spotify first');
+    syncBtn.style.opacity = canSync ? '' : '0.4';
+    syncBtn.style.cursor = canSync ? '' : 'not-allowed';
+  }
+}
+
+// --- Setlist source picker (all-time / year / most-recent-in-order) ---
+// setlistSource drives the build. tourYearOnly + recentInOrder are derived
+// from it so the resolver logic downstream stays simple.
+let setlistSource = 'alltime';
+const yearPicker = document.getElementById('tour-year');
+
+function applySetlistSource(value) {
+  setlistSource = value;
+  tourYearOnly = (value === 'year');
+  recentInOrder = (value === 'recent');
+  if (yearPicker) yearPicker.classList.toggle('hidden', value !== 'year');
+  console.log(`Setlist source → ${value}`);
+}
+
+document.querySelectorAll('input[name="setlist-source"]').forEach((radio) => {
+  radio.addEventListener('change', () => {
+    if (radio.checked) applySetlistSource(radio.value);
+  });
+});
 
 if (yearPicker) {
   // default the picker to a sensible recent span; it self-populates
@@ -392,6 +568,10 @@ document
         cb.checked = true;
         card.classList.add('selected');
       });
+    updateSelectedCount();
+    if (!document.getElementById('selected-panel').classList.contains('hidden')) {
+      renderSelectedPanel();
+    }
   });
 
 document
@@ -404,11 +584,131 @@ document
         cb.checked = false;
         card.classList.remove('selected');
       });
+    updateSelectedCount();
+    if (!document.getElementById('selected-panel').classList.contains('hidden')) {
+      renderSelectedPanel();
+    }
   });
+
+// ==========================
+// SELECTED BANDS PANEL
+//
+// A live view of the bands you've picked, with each one's tier and
+// a quick way to drop it. Needs no Spotify — pure DOM state — so it
+// works even while Spotify is rate-limited. The badge on the button
+// always reflects the current count.
+// ==========================
+
+function getSelectedCards() {
+  return Array.from(document.querySelectorAll('.band-card')).filter(
+    (card) => card.querySelector('.band-checkbox')?.checked
+  );
+}
+
+function updateSelectedCount() {
+  const badge = document.getElementById('selected-count');
+  if (!badge) return;
+  const n = getSelectedCards().length;
+  badge.textContent = String(n);
+  badge.classList.toggle('empty', n === 0);
+}
+
+function renderSelectedPanel() {
+  const list = document.getElementById('selected-list');
+  if (!list) return;
+
+  const cards = getSelectedCards();
+  list.innerHTML = '';
+
+  if (!cards.length) {
+    list.innerHTML =
+      '<div class="selected-empty">No bands picked yet. ' +
+      'Check some bands in the grid below.</div>';
+    return;
+  }
+
+  cards.forEach((card) => {
+    const name = card.querySelector('.band-checkbox').value;
+    const select = card.querySelector('.tier-select');
+    const custom = card.querySelector('.custom-input');
+    const tierLabel = select.value === 'custom'
+      ? `${custom.value || '5'} songs`
+      : (select.options[select.selectedIndex]?.textContent || '').trim();
+
+    const item = document.createElement('div');
+    item.className = 'selected-item';
+    item.innerHTML = `
+      <span class="selected-item-name">${escapeHtml(name)}</span>
+      <span class="selected-item-tier">${escapeHtml(tierLabel)}</span>
+      <button class="selected-item-remove" title="Remove">✕</button>
+    `;
+
+    item.querySelector('.selected-item-remove').addEventListener('click', () => {
+      const cb = card.querySelector('.band-checkbox');
+      cb.checked = false;
+      card.classList.remove('selected');
+      updateSelectedCount();
+      renderSelectedPanel();
+    });
+
+    list.appendChild(item);
+  });
+}
+
+document
+  .getElementById('show-selected')
+  .addEventListener('click', () => {
+    const panel = document.getElementById('selected-panel');
+    const willShow = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', !willShow);
+    if (willShow) renderSelectedPanel();
+  });
+
+document
+  .getElementById('selected-close')
+  .addEventListener('click', () => {
+    document.getElementById('selected-panel').classList.add('hidden');
+  });
+
+// keep the badge current whenever any checkbox changes (grid uses
+// event delegation on the container so custom-added bands work too)
+document.getElementById('band-grid').addEventListener('change', (e) => {
+  if (e.target.classList.contains('band-checkbox')) {
+    updateSelectedCount();
+    if (!document.getElementById('selected-panel').classList.contains('hidden')) {
+      renderSelectedPanel();
+    }
+  }
+});
 
 // ==========================
 // ADD CUSTOM BAND
 // ==========================
+
+// populate the genre picker from the existing genre categories,
+// plus an "Added by me" catch-all option
+(function populateNewBandGenre() {
+  const sel = document.getElementById('new-band-genre');
+  if (!sel) return;
+  Object.keys(GENRE_BANDS).forEach((genre) => {
+    const opt = document.createElement('option');
+    opt.value = genre;
+    opt.textContent = genre;
+    sel.appendChild(opt);
+  });
+  const custom = document.createElement('option');
+  custom.value = 'Added by me';
+  custom.textContent = 'Added by me';
+  sel.appendChild(custom);
+})();
+
+// auto toggle: when on, hide/disable the genre picker (everything → "Added by me")
+document
+  .getElementById('new-band-auto')
+  .addEventListener('change', (e) => {
+    const sel = document.getElementById('new-band-genre');
+    if (sel) sel.style.display = e.target.checked ? 'none' : '';
+  });
 
 document
   .getElementById('add-band')
@@ -426,12 +726,25 @@ document
       return;
     }
 
-    // appended at the end (genre "Other") rather than re-sorted —
-    // a global sort here would undo the genre-grouped order of
-    // MASTER_BANDS built in script-part1.js
+    // decide the category: auto-toggle → "Added by me", else the picker
+    const auto = document.getElementById('new-band-auto')?.checked;
+    const genreSel = document.getElementById('new-band-genre');
+    const genre = auto
+      ? 'Added by me'
+      : (genreSel ? genreSel.value : 'Added by me');
+
+    // add to the in-memory grid immediately
     MASTER_BANDS.push(band);
+    if (typeof BAND_GENRES !== 'undefined') BAND_GENRES[band] = genre;
     input.value = '';
     renderGrid();
+
+    // remember this band's category in Supabase so it reappears next
+    // session. We save a lightweight row now (name + genre); the full
+    // setlist/songs get filled in when the band is first built.
+    if (typeof dbSaveBandGenre === 'function') {
+      dbSaveBandGenre(band, genre);
+    }
   });
 
 // ==========================
@@ -506,7 +819,7 @@ function eventYear(show) {
 // filterYear (optional): only count shows from that calendar year.
 // Returns songs with per-song play counts + the year list actually seen,
 // so the UI can offer a year picker without a second fetch.
-async function getSetlistSongs(artistName, filterYear = null) {
+async function getSetlistSongs(artistName, filterYear = null, mostRecentInOrder = false) {
   try {
     const searchRes = await setlistFetch(
       setlistUrl(
@@ -562,15 +875,64 @@ async function getSetlistSongs(artistName, filterYear = null) {
     const years = [...new Set(setlists.map(eventYear).filter(Boolean))]
       .sort((a, b) => b - a);
 
-    // apply the year filter if one was requested (and that year exists)
-    const scoped = filterYear
-      ? setlists.filter((s) => eventYear(s) === filterYear)
-      : setlists;
-
-    // a show only counts toward totals if it actually lists songs
-    const showsWithSongs = scoped.filter((show) =>
+    // a show only counts if it actually lists songs
+    const songBearing = setlists.filter((show) =>
       (show.sets?.set || []).some((set) => (set.song || []).length)
     );
+
+    // ---- MOST RECENT SHOW, IN ORDER ----
+    // Take the single latest song-bearing show and return its songs in the
+    // exact order played (opener → encore). No frequency ranking here — the
+    // whole point is the real flow of one recent concert.
+    if (mostRecentInOrder) {
+      if (!songBearing.length) {
+        console.warn(`Setlist.fm: no song-bearing show for "${artistName}"`);
+        return { mbid: artistMbid, songs: [], years };
+      }
+
+      // setlist.fm returns newest-first, but sort by date to be safe
+      const withDates = songBearing
+        .map((s) => ({ show: s, y: eventYear(s) || 0 }))
+        .sort((a, b) => b.y - a.y);
+
+      const latest = withDates[0].show;
+      const orderedSongs = [];
+      const seen = new Set();
+
+      for (const set of (latest.sets?.set || [])) {
+        for (const song of (set.song || [])) {
+          if (!song.name || song.cover) continue;
+          const key = song.name.toLowerCase().trim();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          orderedSongs.push({ name: song.name.trim(), count: null, shows: null });
+        }
+      }
+
+      const showDate = latest.eventDate || '';
+      const venue = latest.venue?.name || '';
+      console.log(
+        `Setlist.fm "${artistName}": most-recent show ${showDate}` +
+        (venue ? ` @ ${venue}` : '') + ` — ${orderedSongs.length} songs in order.`
+      );
+
+      return {
+        mbid: artistMbid,
+        songs: orderedSongs,
+        years,
+        showDate,
+        venue,
+        inOrder: true
+      };
+    }
+
+    // apply the year filter if one was requested (and that year exists)
+    const scoped = filterYear
+      ? songBearing.filter((s) => eventYear(s) === filterYear)
+      : songBearing;
+
+    // a show only counts toward totals if it actually lists songs
+    const showsWithSongs = scoped;
 
     const totalShows = showsWithSongs.length;
 
@@ -872,22 +1234,41 @@ async function getNewRelease(artistName) {
 async function resolveTracksForBand(artistName, amount) {
   status(`Checking setlists for ${artistName}...`);
 
-  // Tour-year mode scopes to a single year. The all-time caches
-  // (URIs + songs) don't represent that slice, so in this mode we
-  // bypass them for a fresh year-filtered fetch and DON'T write the
-  // year-scoped result back to the all-time cache.
+  // Tour-year mode scopes to a single year; recent-in-order takes one
+  // show. Both are different from the all-time cache (URIs + songs), so
+  // we bypass the cache for a fresh fetch and DON'T write these back.
   const yearScoped = tourYearOnly && selectedYear;
+  const orderMode = recentInOrder;
+  const bypassCache = yearScoped || orderMode;
 
   // fetch DB row once — reused throughout this function
   const cached = await dbGetBand(artistName);
 
-  // FAST PATH: cached URIs exist → zero Spotify calls
-  // (skipped in year-scoped mode — cache is all-time)
-  if (!yearScoped && cached && cached.uris && cached.uris.length > 0) {
+  // FAST PATH: cached URIs exist AND cover this request → zero Spotify calls.
+  // (skipped in year-scoped / order mode — cache is all-time aggregated)
+  // (skipped in setlist-only mode — we want song data, not URIs)
+  // Since live builds now cache only what was asked, a later LARGER request
+  // may find fewer URIs than it needs — in that case we fall through and
+  // resolve more, then re-save the bigger set.
+  if (
+    !bypassCache && !setlistOnly &&
+    cached && cached.uris && cached.uris.length >= amount
+  ) {
     console.log(
       `URI cache HIT ✅ "${artistName}": returning top ${amount} of ${cached.uris.length}`
     );
     return cached.uris.slice(0, amount);
+  }
+
+  // Partial cache: we have some URIs but not enough for this bigger request.
+  // Seed from them so we don't re-search songs we already resolved.
+  const cachedUris = (!bypassCache && !setlistOnly && cached && Array.isArray(cached.uris))
+    ? cached.uris
+    : [];
+  if (cachedUris.length > 0 && cachedUris.length < amount) {
+    console.log(
+      `URI cache PARTIAL "${artistName}": have ${cachedUris.length}, need ${amount} — topping up`
+    );
   }
 
   // pre-populate artist ID from DB so getArtistId skips the Spotify lookup
@@ -901,9 +1282,10 @@ async function resolveTracksForBand(artistName, amount) {
   // setlist.fm. Saves a full setlist.fm round-trip per band.
   let setlistMbid = cached?.mbid || null;
   let setlistSongs = [];
+  let freshSetlistFetch = false;  // true only when we hit setlist.fm this call
 
   if (
-    !yearScoped &&
+    !bypassCache &&
     cached &&
     cached.mbid &&
     cached.source === 'setlist' &&
@@ -911,16 +1293,26 @@ async function resolveTracksForBand(artistName, amount) {
     cached.songs.length > 0
   ) {
     setlistSongs = normalizeSongEntries(cached.songs);
-    console.log(
-      `Setlist songs loaded from cache ✅ "${artistName}" (${setlistSongs.length} songs, no setlist.fm call)`
-    );
+    const withStats = setlistSongs.filter((s) => s.count != null).length;
+    if (withStats === 0 && setlistSongs.length > 0) {
+      console.log(
+        `Setlist songs loaded from cache ✅ "${artistName}" (${setlistSongs.length} songs) ` +
+        `— ⚠️ no play-count stats (old cache format). Run warmSetlistsOnly() to refresh stats.`
+      );
+    } else {
+      console.log(
+        `Setlist songs loaded from cache ✅ "${artistName}" (${setlistSongs.length} songs, ${withStats} with stats, no setlist.fm call)`
+      );
+    }
   } else {
     const result = await getSetlistSongs(
       artistName,
-      yearScoped ? selectedYear : null
+      yearScoped ? selectedYear : null,
+      orderMode
     );
     setlistMbid = result.mbid || setlistMbid;
     setlistSongs = result.songs;
+    freshSetlistFetch = true;   // we just hit setlist.fm — worth caching
 
     // keep the year picker in sync with real data the first time
     // we see this band's actual show years
@@ -932,12 +1324,81 @@ async function resolveTracksForBand(artistName, amount) {
   const tracks = [];
   const seenNames = new Set();
 
+  // Seed from partial cache (non-setlist-only): reuse URIs we already
+  // resolved so a larger request only searches the NEW songs.
+  if (!setlistOnly && cachedUris.length > 0 && cachedUris.length < amount) {
+    for (const t of cachedUris) {
+      tracks.push(t);
+      if (t.name) seenNames.add(t.name.toLowerCase().trim());
+    }
+  }
+
+  // SETLIST-ONLY MODE: build the result straight from setlist data,
+  // making ZERO Spotify calls. No URIs, no ✓ links, no sync — just
+  // the honest "what this band plays live" answer. This is what makes
+  // SetFlow useful without ever touching Spotify.
+  if (setlistOnly) {
+    for (const songEntry of setlistSongs) {
+      if (tracks.length >= amount) break;
+      const key = songEntry.name.toLowerCase().trim();
+      if (seenNames.has(key)) continue;
+      seenNames.add(key);
+
+      tracks.push({
+        name: songEntry.name,
+        artistName: artistName,
+        uri: null,                 // no Spotify match in this mode
+        source: 'setlist',
+        playCount: songEntry.count != null ? songEntry.count : null,
+        totalShows: songEntry.shows != null ? songEntry.shows : null
+      });
+    }
+    console.log(`${artistName}: ${tracks.length} setlist-only songs (no Spotify).`);
+
+    // Persist the setlist data we just fetched (mbid + songs, no URIs),
+    // so a band built in setlist-only mode still gets cached and doesn't
+    // hit setlist.fm again next time. Same rules as elsewhere: don't cache
+    // year/order snapshots over good all-time data, but DO fill an empty
+    // row for a brand-new band.
+    const hasGoodCacheSO =
+      cached &&
+      Array.isArray(cached.songs) &&
+      cached.songs.length > 0 &&
+      cached.source === 'setlist' &&
+      cached.songs.some((s) => s && typeof s === 'object' && s.count != null);
+
+    const shouldWriteSO =
+      freshSetlistFetch &&
+      (!bypassCache || !hasGoodCacheSO) &&
+      setlistSongs.length > 0;
+
+    if (shouldWriteSO) {
+      await dbSaveBand(
+        artistName,
+        setlistMbid || cached?.mbid || null,
+        setlistSongs,
+        cached?.spotify_id || artistCache[artistName] || null,
+        'setlist',
+        cached?.uris || null   // preserve any URIs already cached; don't clear them
+      );
+      console.log(`${artistName}: setlist data cached (setlist-only mode, URIs pending).`);
+    }
+
+    return tracks.slice(0, amount);
+  }
+
   if (setlistSongs.length > 0) {
     status(`Matching ${artistName} songs on Spotify...`);
 
+    // How many to resolve: live builds fetch exactly what's asked (cheap).
+    // Only a deliberate warm run over-fetches to pre-fill the cache for
+    // future larger requests — and that runs slowly, one band at a time.
+    const resolveTarget = warmingInProgress
+      ? Math.max(amount, 20)
+      : amount;
+
     for (const songEntry of setlistSongs) {
-      // fetch more than requested so cache covers future larger requests
-      if (tracks.length >= Math.max(amount, 20)) break;
+      if (tracks.length >= resolveTarget) break;
 
       const key = songEntry.name.toLowerCase().trim();
       if (seenNames.has(key)) continue;
@@ -960,8 +1421,15 @@ async function resolveTracksForBand(artistName, amount) {
     console.log(`${artistName}: ${tracks.length} tracks matched from setlist.fm`);
   }
 
-  // top up from Spotify if short
-  if (tracks.length < amount) {
+  // top up from Spotify if short.
+  // Fix 1: skip the fallback when setlist matching already got us close
+  // enough (within 1 song of the target). Those extra searches to pad
+  // the very last slot rarely help and cost 3-6 calls. If setlist gave
+  // us most of what was asked, that's a better playlist than padding it
+  // with top-tracks anyway.
+  const closeEnough = tracks.length >= amount - 1 && tracks.length > 0;
+
+  if (tracks.length < amount && !closeEnough) {
     const existingUris = new Set(tracks.map((t) => t.uri));
 
     if (tracks.length > 0) {
@@ -983,10 +1451,20 @@ async function resolveTracksForBand(artistName, amount) {
   if (!tracks.length) {
     // Spotify matched nothing (or is unavailable) — but if we DID
     // get setlist data, save it anyway so the setlist.fm fetch isn't
-    // wasted. URIs stay empty; a future run fills them in without
-    // touching setlist.fm again.
-    // (Never cache year-scoped data — it's not the all-time picture.)
-    if (!yearScoped && (setlistSongs.length > 0 || setlistMbid)) {
+    // wasted. URIs stay empty; a future run fills them in.
+    // Normally year/order snapshots don't write, but a brand-new band
+    // with no cache yet should still capture its songs + mbid.
+    const hasGoodCacheNoTracks =
+      cached &&
+      Array.isArray(cached.songs) &&
+      cached.songs.length > 0 &&
+      cached.source === 'setlist';
+
+    const shouldWriteNoTracks =
+      (!bypassCache || !hasGoodCacheNoTracks) &&
+      (setlistSongs.length > 0 || setlistMbid);
+
+    if (shouldWriteNoTracks) {
       await dbSaveBand(
         artistName,
         setlistMbid || cached?.mbid || null,
@@ -998,15 +1476,28 @@ async function resolveTracksForBand(artistName, amount) {
       console.log(
         `${artistName}: setlist data cached (URIs pending — Spotify unavailable or no matches)`
       );
-    } else if (!yearScoped) {
+    } else if (!bypassCache) {
       console.warn(`${artistName}: found nothing. Check spelling.`);
     }
     return [];
   }
 
   // save to cache — freshly-found mbid takes priority over stale/null cache
-  // (year-scoped runs skip the write: the all-time cache must stay all-time)
-  if (!yearScoped) {
+  //
+  // Normal (all-time) builds cache everything. Year/order builds are
+  // snapshots, so they normally DON'T write — BUT if the band has no
+  // cached data yet (a brand-new band you just added), we still save
+  // what we found so the row isn't left empty. We never let a snapshot
+  // OVERWRITE existing good all-time data.
+  const hasGoodCache =
+    cached &&
+    Array.isArray(cached.songs) &&
+    cached.songs.length > 0 &&
+    cached.source === 'setlist';
+
+  const shouldWrite = !bypassCache || !hasGoodCache;
+
+  if (shouldWrite) {
     const spotifyIdToSave =
       cached?.spotify_id || artistCache[artistName] || null;
 
@@ -1016,20 +1507,26 @@ async function resolveTracksForBand(artistName, amount) {
 
     const source = setlistSongs.length > 0 ? 'setlist' : 'spotify';
 
+    // year/order snapshots: keep the mbid + songs but don't attach URIs
+    // to the all-time row (they're scoped, not the general picture)
+    const urisToSave = bypassCache ? (cached?.uris || null) : tracks;
+
     await dbSaveBand(
       artistName,
       setlistMbid || cached?.mbid || null,
       songsToSave,
       spotifyIdToSave,
       source,
-      tracks
+      urisToSave
     );
 
     console.log(
-      `${artistName}: ${tracks.length} tracks resolved + URIs saved to cache`
+      bypassCache
+        ? `${artistName}: new band — snapshot data saved (mbid + songs; URIs pending an all-time build)`
+        : `${artistName}: ${tracks.length} tracks resolved + URIs saved to cache`
     );
   } else {
-    console.log(`${artistName}: ${tracks.length} year-scoped tracks (not cached)`);
+    console.log(`${artistName}: ${tracks.length} year/order tracks (existing all-time cache kept)`);
   }
 
   return tracks.slice(0, amount);
@@ -1141,8 +1638,11 @@ document
         );
 
         for (const t of bandTracks) {
-          if (!t.uri) continue;
-          if (seenUris.has(t.uri)) continue;
+          // In setlist-only mode tracks have no URI — dedup by title only.
+          // Otherwise dedup by URI first, then title.
+          if (t.uri) {
+            if (seenUris.has(t.uri)) continue;
+          }
 
           const cleanName = (t.name || '')
             .toLowerCase()
@@ -1154,7 +1654,7 @@ document
 
           if (seenTitles.has(titleKey)) continue;
 
-          seenUris.add(t.uri);
+          if (t.uri) seenUris.add(t.uri);
           seenTitles.add(titleKey);
           finalTracks.push(t);
         }
@@ -1206,8 +1706,170 @@ document
   });
 
 // ==========================
-// RENDER PREVIEW PANEL
+// APPEND TRACKS (shared dedup helper)
+// Merges new band tracks into previewTracks without duplicates.
 // ==========================
+
+function appendTracksToPreview(bandTracks) {
+  const seenUris = new Set(previewTracks.filter(t => t.uri).map(t => t.uri));
+  const seenTitles = new Set(previewTracks.map(t => {
+    const cleanName = (t.name || '').toLowerCase()
+      .replace(/\s*[-\u2013([].*$/, '').trim();
+    return (t.artistName || '').toLowerCase() + '|' + cleanName;
+  }));
+
+  let added = 0;
+  for (const t of bandTracks) {
+    if (t.uri && seenUris.has(t.uri)) continue;
+    const cleanName = (t.name || '').toLowerCase()
+      .replace(/\s*[-\u2013([].*$/, '').trim();
+    const titleKey = (t.artistName || '').toLowerCase() + '|' + cleanName;
+    if (seenTitles.has(titleKey)) continue;
+    if (t.uri) seenUris.add(t.uri);
+    seenTitles.add(titleKey);
+    previewTracks.push(t);
+    added++;
+  }
+  return added;
+}
+
+// ==========================
+// RESOLVE TO SPOTIFY (prune-then-resolve)
+//
+// In setlist-only mode you browse + prune with ZERO Spotify calls.
+// This button takes ONLY the songs currently in the preview (after
+// you've removed the ones you don't want) and resolves those exact
+// songs to Spotify — so it calls Spotify once per KEPT song, never
+// for songs you already ditched.
+// ==========================
+
+document
+  .getElementById('resolve-btn')
+  .addEventListener('click', async () => {
+    // hard guard: Spotify mode must be on
+    if (!spotifyModeOn) {
+      status('Turn on Spotify mode (above the build button) to resolve songs.');
+      return;
+    }
+
+    // songs still needing a Spotify match (no uri yet)
+    const toResolve = previewTracks.filter((t) => !t.uri && !t.isNewRelease);
+
+    if (!toResolve.length) {
+      status('These songs are already on Spotify — hit Spotify to sync.');
+      return;
+    }
+
+    if (spotifyAppUnavailable || spotifyOnCooldown()) {
+      status('Spotify is unavailable right now. Try again shortly.');
+      return;
+    }
+
+    const btn = document.getElementById('resolve-btn');
+    btn.disabled = true;
+
+    let resolved = 0;
+    let failed = 0;
+
+    try {
+      for (let i = 0; i < toResolve.length; i++) {
+        const t = toResolve[i];
+        status(`Resolving ${i + 1}/${toResolve.length}: ${t.name}...`);
+
+        const match = await findTrack(t.artistName, t.name);
+
+        if (match && match.uri) {
+          // upgrade the existing track in place — keep its stats
+          t.uri = match.uri;
+          t.spotifyUrl = match.spotifyUrl || null;
+          t.album = match.album || null;
+          t.verified = true;
+          resolved++;
+        } else {
+          failed++;
+          console.warn(`Resolve: no match for "${t.name}" by ${t.artistName}`);
+        }
+
+        renderPreview();  // live update ✓ marks as they resolve
+      }
+
+      const matchedNow = previewTracks.filter((t) => t.uri).length;
+      status(
+        `Resolved ${resolved} song${resolved === 1 ? '' : 's'} to Spotify` +
+        (failed ? ` (${failed} not found)` : '') +
+        `. ${matchedNow} ready to sync — hit Spotify.`
+      );
+    } catch (err) {
+      console.error(err);
+      status(`Stopped resolving: ${err.message}. Already-resolved songs are kept.`);
+    }
+
+    btn.disabled = false;
+    applySetlistOnlyUI();
+  });
+
+// ==========================
+// ADD A BAND to the existing setlist (no full rebuild)
+// ==========================
+
+// populate the preview tier dropdown from the current mode's tiers
+function populatePreviewTierSelect() {
+  const sel = document.getElementById('preview-new-tier');
+  if (!sel) return;
+  sel.innerHTML = '';
+  TIER_CONFIGS[currentMode].forEach((tier) => {
+    if (tier.songs === 'custom') return;  // skip custom in this quick-add
+    const opt = document.createElement('option');
+    opt.value = String(tier.songs);
+    opt.textContent = tier.name;
+    sel.appendChild(opt);
+  });
+  // default to a small tier
+  sel.value = '7';
+}
+populatePreviewTierSelect();
+
+document
+  .getElementById('preview-add-btn')
+  .addEventListener('click', async () => {
+    const input = document.getElementById('preview-new-band');
+    const artist = input.value.trim();
+    if (!artist) return;
+
+    const amount = Math.max(1, Math.min(
+      parseInt(document.getElementById('preview-new-tier').value) || 7, 20
+    ));
+
+    const btn = document.getElementById('preview-add-btn');
+    btn.disabled = true;
+    status(`Adding ${artist} to your setlist...`);
+
+    try {
+      const bandTracks = await resolveTracksForBand(artist, amount);
+
+      if (!bandTracks.length) {
+        status(`Couldn't find setlist data for "${artist}". Check spelling.`);
+        btn.disabled = false;
+        return;
+      }
+
+      const added = appendTracksToPreview(bandTracks);
+      input.value = '';
+      renderPreview();
+
+      status(
+        added
+          ? `Added ${added} song${added === 1 ? '' : 's'} from ${artist}.` +
+            (setlistOnly ? ' Hit "Resolve to Spotify" when ready.' : '')
+          : `${artist}'s songs were already in your setlist.`
+      );
+    } catch (err) {
+      console.error(err);
+      status(`Couldn't add ${artist}: ${err.message}`);
+    }
+
+    btn.disabled = false;
+  });
 
 function renderPreview() {
   const panel = document.getElementById('preview-panel');
@@ -1237,6 +1899,41 @@ function renderPreview() {
 
   document.getElementById('preview-summary').textContent =
     `${previewTracks.length} songs · ${order.length} bands`;
+
+  // Resolve bar: show whenever there are songs still needing a Spotify
+  // match. Framed so PDF/Link read as complete exports on their own and
+  // Spotify is the optional extra — not the default destination.
+  const resolveBar = document.getElementById('resolve-bar');
+  const resolveBtn = document.getElementById('resolve-btn');
+  const resolveNote = resolveBar ? resolveBar.querySelector('.resolve-note') : null;
+  if (resolveBar && resolveBtn) {
+    const unresolved = previewTracks.filter((t) => !t.uri && !t.isNewRelease).length;
+    resolveBar.classList.toggle('hidden', unresolved === 0);
+
+    if (unresolved > 0) {
+      if (spotifyModeOn) {
+        resolveBtn.textContent = `♫ Resolve ${unresolved} to Spotify`;
+        resolveBtn.disabled = false;
+        resolveBtn.style.opacity = '';
+        resolveBtn.style.cursor = '';
+        if (resolveNote) {
+          resolveNote.textContent = 'Export as PDF or Link with no Spotify needed — or';
+        }
+      } else {
+        // Spotify mode off → resolve greyed out with a hint
+        resolveBtn.textContent = `♫ Resolve ${unresolved} to Spotify`;
+        resolveBtn.disabled = true;
+        resolveBtn.style.opacity = '0.4';
+        resolveBtn.style.cursor = 'not-allowed';
+        if (resolveNote) {
+          resolveNote.textContent = 'Turn on Spotify mode above to resolve these songs — or just';
+        }
+      }
+    }
+  }
+
+  // keep the sync button enabled/disabled in step with resolved tracks
+  applySetlistOnlyUI();
 
   list.innerHTML = '';
 
@@ -1331,7 +2028,10 @@ function renderPreview() {
       `;
 
       row.querySelector('.preview-remove').addEventListener('click', () => {
-        previewTracks = previewTracks.filter((x) => x.uri !== t.uri);
+        // remove THIS track by object identity — works whether or not it
+        // has a URI (setlist-only tracks all share uri:null, so filtering
+        // by uri would wrongly remove every track).
+        previewTracks = previewTracks.filter((x) => x !== t);
         renderPreview();
         status(`${previewTracks.length} songs in your setlist.`);
       });
@@ -1851,16 +2551,24 @@ async function warmSetlistsOnly(delayMs = 1000) {
     try {
       const cached = await dbGetBand(band);
 
-      // already has real setlist data → nothing to do
-      if (
+      // Does this band already have GOOD data — songs WITH play counts?
+      // Old cache rows stored songs as plain strings (or objects with
+      // count:null), which show no "38/40 shows" stats. Those need a
+      // re-warm even though they technically "have songs". So we only
+      // skip when the songs carry real play-count data.
+      const hasStatsData =
         cached &&
         cached.mbid &&
         cached.source === 'setlist' &&
         Array.isArray(cached.songs) &&
-        cached.songs.length > 0
-      ) {
+        cached.songs.length > 0 &&
+        cached.songs.some(
+          (s) => s && typeof s === 'object' && s.count != null
+        );
+
+      if (hasStatsData) {
         skipped++;
-        status(`Setlist warm: ${done}/${MASTER_BANDS.length} — ${band} (cached)`);
+        status(`Setlist warm: ${done}/${MASTER_BANDS.length} — ${band} (has stats)`);
         continue;
       }
 
@@ -1899,9 +2607,14 @@ async function warmCache(delayMs = 2000) {
   let done = 0;
 
   // the cache is always the ALL-TIME picture — force year mode off
-  // for the duration of the warm, then restore whatever the UI had
+  // for the duration of the warm, then restore whatever the UI had.
+  // warmingInProgress lets the resolver over-fetch (20 songs) to pre-fill
+  // the cache — something we only want during a deliberate, paced warm.
   const prevTourOnly = tourYearOnly;
+  const prevSetlistOnly = setlistOnly;
   tourYearOnly = false;
+  setlistOnly = false;         // warming needs real URIs, not setlist-only
+  warmingInProgress = true;
 
   try {
     for (const band of MASTER_BANDS) {
@@ -1916,6 +2629,8 @@ async function warmCache(delayMs = 2000) {
     }
   } finally {
     tourYearOnly = prevTourOnly;
+    setlistOnly = prevSetlistOnly;
+    warmingInProgress = false;
   }
 
   console.log('🔥 Cache warm complete.');
@@ -1929,4 +2644,6 @@ async function warmCache(delayMs = 2000) {
 // (resumePendingPlaylist, renderGrid) is guaranteed to exist.
 // ==========================
 
+updateSelectedCount();
+applySpotifyMode();  // start in safe setlist-only state, UI reflects OFF
 boot();
